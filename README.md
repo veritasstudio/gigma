@@ -1,12 +1,18 @@
 # SonoBus Wrapper
 
-A simplified, Zoom-like UI around [SonoBus](https://www.sonobus.net/) for musicians who want low-latency DAW audio collaboration without the technical setup.
+A modern, Zoom-simple UI around [SonoBus](https://www.sonobus.net/) for musicians who want low-latency DAW audio collaboration without the technical setup.
 
 ## Why this exists
 
 SonoBus is excellent at peer-to-peer, low-latency audio — free, open source, and available as a DAW plugin and standalone app. The tradeoff is that getting a reliable session often means wrestling with buffer sizes, codecs, network stats, and audio-device settings.
 
-This project aims to wrap that power in a friendlier flow: join or create a session in a few clicks, sensible defaults for jamming and remote tracking, and less jargon between you and making music together.
+This project wraps that power in a friendlier product: a polished, contemporary interface that feels as easy as Zoom — join or create a session in a few clicks, clear controls, sensible defaults for jamming and remote tracking, and as little jargon as possible between you and making music together.
+
+## Design principles
+
+- **As simple as Zoom** — create/join a room, mute, leave; advanced audio knobs stay out of the way until you need them
+- **Modern aesthetics** — clean layout, readable typography, calm visual hierarchy; not a dense engineer console by default
+- **UX-first** — one obvious path for first-time musicians; power options available, not required
 
 ## Goals
 
@@ -32,4 +38,4 @@ This project is intended to stay GPL-compatible with SonoBus. License file TBD o
 
 ## Contributing
 
-Ideas and PRs welcome once the first UI shell exists. Please keep the focus on musicians who should not need to become network engineers to play together.
+Ideas and PRs welcome once the first UI shell exists. Please keep the focus on musicians who should not need to become network engineers to play together — and on keeping the interface modern and Zoom-simple.
