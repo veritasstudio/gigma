@@ -27,6 +27,8 @@ juce_add_plugin(GigmaPlugin
   PRODUCT_NAME "Gigma"
 )
 
+juce_generate_juce_header(GigmaPlugin)
+
 target_sources(GigmaPlugin
   PRIVATE
     Source/PluginProcessor.cpp
@@ -48,8 +50,9 @@ if(GIGMA_HAS_AOO)
   if(NOT DEFINED AOO_PATH)
     message(FATAL_ERROR "Set -DAOO_PATH=/path/to/aoo (upstream https://git.iem.at/aoo/aoo)")
   endif()
-  target_include_directories(GigmaPlugin PRIVATE ${AOO_PATH}/include ${AOO_PATH}/lib)
-  target_link_libraries(GigmaPlugin PRIVATE aoo opus)
+  set(AOO_BUILD_DIR "${AOO_PATH}/build" CACHE PATH "AOO cmake build dir (static libaoo + libopus)")
+  target_include_directories(GigmaPlugin PRIVATE ${AOO_PATH}/include ${AOO_PATH}/deps/opus/include)
+  target_link_libraries(GigmaPlugin PRIVATE ${AOO_BUILD_DIR}/aoo/libaoo.a ${AOO_BUILD_DIR}/deps/opus/libopus.a)
 endif()
 
 target_link_libraries(GigmaPlugin

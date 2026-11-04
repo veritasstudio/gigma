@@ -14,10 +14,15 @@
   </header>
   <main class="stage">
     <div class="tile self" id="self-tile">You</div>
-    <div class="tile guest muted-tile">Open session — audio is hosted by the producer’s Gigma plugin</div>
+    <div class="tile host" id="host-tile">
+      <span id="host-label">Producer</span>
+      <small id="host-state">Waiting for the producer’s Gigma plugin…</small>
+      <div class="meter"><i id="meter"></i></div>
+    </div>
   </main>
   <footer class="controls">
-    <button id="mute" type="button" aria-pressed="false">Mute</button>
+    <button id="listen" class="primary" type="button">Listen</button>
+    <button id="mute" type="button" aria-pressed="false" disabled>Mute</button>
     <button id="copy" type="button">Copy link</button>
     <a class="danger" href="/">Leave</a>
   </footer>
@@ -27,14 +32,95 @@
     const name = new URLSearchParams(location.search).get('name') || sessionStorage.getItem('gigma:name') || 'Guest';
     document.getElementById('you').textContent = name;
     document.getElementById('self-tile').textContent = name;
-    fetch('/api/sessions/' + id).then(r => r.json()).then(s => {
-      document.getElementById('meeting-title').textContent = s.title || 'Session';
-    }).catch(() => {});
-    document.getElementById('mute').onclick = (e) => {
+    const hostTile = document.getElementById('host-tile');
+    const hostState = document.getElementById('host-state');
+    const meter = document.getElementById('meter');
+    const listenBtn = document.getElementById('listen');
+    const muteBtn = document.getElementById('mute');
+
+    let listening = false, lastAudioAt = 0;
+
+    async function poll() {
+      try {
+        const s = await (await fetch('/api/sessions/' + id)).json();
+        document.getElementById('meeting-title').textContent = s.title || 'Session';
+        if (s.host) document.getElementById('host-label').textContent = s.host.label || 'Producer';
+        const streaming = Date.now() - lastAudioAt < 1500;
+        hostTile.classList.toggle('live', streaming);
+        if (streaming) hostState.textContent = 'Live from the DAW';
+        else if (s.hasHost && s.hostLive) hostState.textContent = listening ? 'Connected — waiting for audio (is the DAW playing?)' : 'Producer is online — press Listen';
+        else hostState.textContent = 'Waiting for the producer’s Gigma plugin…';
+      } catch (_) {}
+    }
+    poll(); setInterval(poll, 2000);
+
+    // ---- Relay player: PCM16 frames over WebSocket → Web Audio ----
+    // Frame: seq u32 | sampleRate u32 | channels u8 | 3 reserved | int16 LE interleaved
+    let ctx, gain, ws, nextTime = 0, pending = [], pendingFrames = 0, pendingRate = 48000, pendingCh = 2;
+    const TARGET_LATENCY = 0.25, CHUNK_SEC = 0.04;
+
+    function flush() {
+      if (!pendingFrames) return;
+      const buf = ctx.createBuffer(pendingCh, pendingFrames, pendingRate);
+      const outs = [];
+      for (let c = 0; c < pendingCh; c++) outs.push(buf.getChannelData(c));
+      let o = 0, peak = 0;
+      for (const p of pending) {
+        const n = p.length / pendingCh;
+        for (let i = 0; i < n; i++) for (let c = 0; c < pendingCh; c++) {
+          const v = p[i * pendingCh + c] / 32768; outs[c][o + i] = v;
+          if (c === 0 && Math.abs(v) > peak) peak = Math.abs(v);
+        }
+        o += n;
+      }
+      pending = []; pendingFrames = 0;
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(gain);
+      const now = ctx.currentTime;
+      if (nextTime < now + 0.02 || nextTime > now + 1.0) nextTime = now + TARGET_LATENCY; // underrun/drift reset
+      src.start(nextTime);
+      nextTime += buf.duration;
+      meter.style.width = Math.min(100, Math.round(peak * 140)) + '%';
+    }
+
+    function onFrame(ab) {
+      if (ab.byteLength <= 12) return;
+      const dv = new DataView(ab);
+      const rate = dv.getUint32(4, true), ch = dv.getUint8(8) || 1;
+      if (rate !== pendingRate || ch !== pendingCh) { flush(); pendingRate = rate; pendingCh = ch; }
+      const samples = new Int16Array(ab.slice(12));
+      pending.push(samples); pendingFrames += samples.length / ch;
+      lastAudioAt = Date.now();
+      if (pendingFrames >= pendingRate * CHUNK_SEC) flush();
+    }
+
+    function connect() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/api/sessions/' + id + '/listen');
+      ws.binaryType = 'arraybuffer';
+      ws.onmessage = (e) => onFrame(e.data);
+      ws.onclose = () => { if (listening) setTimeout(connect, 1500); };
+    }
+
+    listenBtn.onclick = async () => {
+      if (listening) {
+        listening = false; ws && ws.close(); ctx && ctx.close(); ctx = null;
+        listenBtn.textContent = 'Listen'; muteBtn.disabled = true; meter.style.width = '0';
+        return;
+      }
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      await ctx.resume();
+      gain = ctx.createGain(); gain.connect(ctx.destination);
+      nextTime = 0; listening = true; connect();
+      listenBtn.textContent = 'Stop'; muteBtn.disabled = false; poll();
+    };
+
+    muteBtn.onclick = (e) => {
       const b = e.currentTarget;
       const on = b.getAttribute('aria-pressed') === 'true';
       b.setAttribute('aria-pressed', String(!on));
       b.textContent = on ? 'Mute' : 'Unmute';
+      if (gain) gain.gain.value = on ? 1 : 0;
     };
     document.getElementById('copy').onclick = async () => {
       await navigator.clipboard.writeText(location.origin + '/m/' + id);

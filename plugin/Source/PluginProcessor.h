@@ -3,7 +3,8 @@
 #include "GigmaSessionClient.h"
 #include "GigmaAooEngine.h"
 
-class GigmaAudioProcessor : public juce::AudioProcessor
+class GigmaAudioProcessor : public juce::AudioProcessor,
+                            private juce::Thread
 {
 public:
     GigmaAudioProcessor();
@@ -36,7 +37,22 @@ public:
     juce::String lastMeetingUrl() const { return meetingUrl; }
     void setLastMeetingUrl (juce::String u) { meetingUrl = std::move (u); }
 
+    /** UI actions (message thread). Kick the worker to sync immediately. */
+    GigmaSessionResult hostNewMeeting();
+    GigmaSessionResult joinMeeting (const juce::String& linkOrId);
+
+    /** Live status for the editor. */
+    struct Status { int peers = 0; int listeners = 0; bool relayOn = false; bool brokerOk = false; bool hostLive = false; };
+    Status status() const;
+
 private:
+    void run() override;   // broker heartbeat + peer sync (every ~2 s)
+    void syncWithBroker();
+
+    std::atomic<int> statPeers { 0 }, statListeners { 0 };
+    std::atomic<bool> statBrokerOk { false }, statHostLive { false };
+    int lastUdpPort = 0;
+
     GigmaSessionClient sessionClient;
     GigmaAooEngine aooEngine;
     juce::String meetingUrl;

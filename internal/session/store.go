@@ -7,10 +7,16 @@ import (
 	"time"
 )
 
+// Guest is anyone who opened the meeting link. Browser guests listen through
+// the broker's WebSocket relay; plugin guests advertise an AOO UDP endpoint so
+// the host plugin can addSink() them directly.
 type Guest struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	JoinedAt time.Time `json:"joinedAt"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Kind        string    `json:"kind"` // "browser" | "plugin"
+	AOOEndpoint string    `json:"aooEndpoint,omitempty"`
+	JoinedAt    time.Time `json:"joinedAt"`
+	SeenAt      time.Time `json:"seenAt"`
 }
 
 type Session struct {
@@ -57,9 +63,12 @@ func (s *Store) Get(id string) (*Session, bool) {
 	return &cp, true
 }
 
-func (s *Store) Join(id, name string) (*Guest, *Session, bool) {
+func (s *Store) Join(id, name, kind, aooEndpoint string) (*Guest, *Session, bool) {
 	if name == "" {
 		name = "Guest"
+	}
+	if kind != "plugin" {
+		kind = "browser"
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,11 +76,50 @@ func (s *Store) Join(id, name string) (*Guest, *Session, bool) {
 	if !ok {
 		return nil, nil, false
 	}
-	g := Guest{ID: newID(), Name: name, JoinedAt: time.Now().UTC()}
+	now := time.Now().UTC()
+	g := Guest{ID: newID(), Name: name, Kind: kind, AOOEndpoint: aooEndpoint, JoinedAt: now, SeenAt: now}
 	sess.Guests = append(sess.Guests, g)
 	cp := *sess
 	cp.Guests = append([]Guest(nil), sess.Guests...)
 	return &g, &cp, true
+}
+
+// Touch refreshes a guest's liveness and (optionally) its AOO endpoint.
+func (s *Store) Touch(id, guestID, aooEndpoint string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
+	if !ok {
+		return false
+	}
+	for i := range sess.Guests {
+		if sess.Guests[i].ID == guestID {
+			sess.Guests[i].SeenAt = time.Now().UTC()
+			if aooEndpoint != "" {
+				sess.Guests[i].AOOEndpoint = aooEndpoint
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// PluginPeers returns plugin guests with an AOO endpoint seen within maxAge.
+func (s *Store) PluginPeers(id string, maxAge time.Duration) []Guest {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, ok := s.byID[id]
+	if !ok {
+		return nil
+	}
+	cutoff := time.Now().Add(-maxAge)
+	out := []Guest{}
+	for _, g := range sess.Guests {
+		if g.Kind == "plugin" && g.AOOEndpoint != "" && g.SeenAt.After(cutoff) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 func newID() string {

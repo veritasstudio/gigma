@@ -86,3 +86,6 @@ plugin/Builds/
 *.vst3
 *.component
 *.appex
+
+# Vendored deps (clone locally, never commit)
+third_party/

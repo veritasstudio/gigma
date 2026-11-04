@@ -57,3 +57,19 @@ s=json.loads('''$GET''')
 assert s['hasHost'] and len(s['guests'])==1 and s['guests'][0]['name']=='Alex'
 print('OK join-flow')
 PY
+
+# 5) Plugin guest joins with its own AOO endpoint → host heartbeat lists it as a peer
+PJ=$(curl -sf -X POST "$BASE/api/sessions/$ID/join" -H 'content-type: application/json' \
+  -d '{"name":"Studio B","kind":"plugin","aooEndpoint":"198.51.100.7:15000"}')
+GID=$(python3 -c "import json,sys; print(json.load(sys.stdin)['guest']['id'])" <<<"$PJ")
+HB=$(curl -sf -X POST "$BASE/api/sessions/$ID/host/heartbeat" -H 'content-type: application/json' \
+  -d "{\"hostId\":\"$HOST_ID\",\"aooEndpoint\":\"203.0.113.10:14999\"}")
+GHB=$(curl -sf -X POST "$BASE/api/sessions/$ID/guests/$GID/heartbeat" -H 'content-type: application/json' \
+  -d '{"aooEndpoint":"198.51.100.7:15000"}')
+python3 - << PY
+import json
+hb=json.loads('''$HB'''); g=json.loads('''$GHB''')
+assert [p['aooEndpoint'] for p in hb['peers']]==['198.51.100.7:15000'], hb
+assert g['aooEndpoint']=='203.0.113.10:14999' and g['hostLive'], g
+print('OK plugin-peers')
+PY

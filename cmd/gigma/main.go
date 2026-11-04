@@ -12,9 +12,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/veritasstudio/gigma/internal/pluginreg"
+	"github.com/veritasstudio/gigma/internal/relay"
 	"github.com/veritasstudio/gigma/internal/session"
 )
+
+const peerMaxAge = 30 * time.Second
 
 func main() {
 	addr := env("GIGMA_ADDR", ":8080")
@@ -23,13 +27,29 @@ func main() {
 
 	store := session.NewStore()
 	plugins := pluginreg.New()
+	// UDP ingest for host→browser audio. Public address is what the plugin
+	// sends to (the VPS IP; the HTTP hostname sits behind Cloudflare).
+	relayAddr := env("GIGMA_RELAY_UDP", ":7300")
+	relayPublic := os.Getenv("GIGMA_RELAY_PUBLIC")
+	hub := relay.New(func(sid, hid string) bool {
+		h, ok := plugins.Get(sid)
+		return ok && h.HostID == hid
+	})
+	if relayAddr != "off" {
+		go func() {
+			if err := hub.ListenUDP(relayAddr); err != nil {
+				log.Printf("relay disabled: %v", err)
+			}
+		}()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":     true,
 			"role":   "meeting-link-broker",
-			"audio":  "plugin-owned",
+			"audio":  "plugin-owned (AOO p2p) + browser relay",
+			"relay":  relayPublic,
 			"public": publicBase,
 		})
 	})
@@ -57,16 +77,18 @@ func main() {
 		}
 		host, hasHost := plugins.Get(id)
 		resp := map[string]any{
-			"id":      s.ID,
-			"title":   s.Title,
-			"path":    "/m/" + s.ID,
-			"url":     publicBase + "/m/" + s.ID,
-			"open":    true,
-			"guests":  s.Guests,
-			"hasHost": hasHost,
+			"id":        s.ID,
+			"title":     s.Title,
+			"path":      "/m/" + s.ID,
+			"url":       publicBase + "/m/" + s.ID,
+			"open":      true,
+			"guests":    s.Guests,
+			"hasHost":   hasHost,
+			"listeners": hub.Listeners(id),
 		}
 		if hasHost {
 			resp["host"] = host
+			resp["hostLive"] = time.Since(host.SeenAt) < peerMaxAge
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
@@ -74,10 +96,12 @@ func main() {
 	mux.HandleFunc("POST /api/sessions/{id}/join", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var body struct {
-			Name string `json:"name"`
+			Name        string `json:"name"`
+			Kind        string `json:"kind"`
+			AOOEndpoint string `json:"aooEndpoint"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		g, s, ok := store.Join(id, body.Name)
+		g, s, ok := store.Join(id, body.Name, body.Kind, body.AOOEndpoint)
 		if !ok {
 			http.Error(w, "session not found", http.StatusNotFound)
 			return
@@ -111,8 +135,9 @@ func main() {
 		}
 		h := plugins.Claim(id, body.Label, body.AOOEndpoint)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"host": h,
-			"url":  publicBase + "/m/" + id,
+			"host":  h,
+			"url":   publicBase + "/m/" + id,
+			"relay": relayPublic,
 		})
 	})
 
@@ -127,7 +152,61 @@ func main() {
 			http.Error(w, "unknown host", http.StatusConflict)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"peers":     store.PluginPeers(id, peerMaxAge),
+			"listeners": hub.Listeners(id),
+			"relay":     relayPublic,
+		})
+	})
+
+	// Plugin guests keep their AOO endpoint fresh and learn the host's.
+	mux.HandleFunc("POST /api/sessions/{id}/guests/{gid}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		id, gid := r.PathValue("id"), r.PathValue("gid")
+		var body struct {
+			AOOEndpoint string `json:"aooEndpoint"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !store.Touch(id, gid, body.AOOEndpoint) {
+			http.Error(w, "unknown guest", http.StatusNotFound)
+			return
+		}
+		resp := map[string]any{"ok": true}
+		if host, ok := plugins.Get(id); ok {
+			resp["aooEndpoint"] = host.AOOEndpoint
+			resp["hostLive"] = time.Since(host.SeenAt) < peerMaxAge
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+
+	// Browser guests: PCM16 frames relayed from the host plugin.
+	mux.HandleFunc("GET /api/sessions/{id}/listen", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if _, ok := store.Get(id); !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		frames, unsub := hub.Subscribe(id)
+		defer unsub()
+		ctx := c.CloseRead(r.Context())
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case f := <-frames:
+				wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				err := c.Write(wctx, websocket.MessageBinary, f)
+				cancel()
+				if err != nil {
+					return
+				}
+			}
+		}
 	})
 
 	mux.HandleFunc("GET /m/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +262,9 @@ func logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
+		if strings.HasSuffix(r.URL.Path, "/heartbeat") {
+			return
+		}
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
 	})
 }
