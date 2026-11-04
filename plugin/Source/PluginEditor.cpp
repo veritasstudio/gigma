@@ -95,7 +95,13 @@ void GigmaAudioProcessorEditor::timerCallback()
     const auto role = processor.session().role();
 
     juce::String text = headline.isNotEmpty() ? headline + "\n" : juce::String();
-    text << "AOO: " << (ep.isNotEmpty() ? ep : juce::String ("not bound (press play / open a track)")) << "\n";
+    if (ep.isEmpty())
+        text << "Audio: not running (press play / open a track)\n";
+    else if (s.peerRelayOn)
+        text << "Internet: " << (s.peerRelayUp ? "connected via Gigma relay" : "connecting to Gigma relay…")
+             << "  ·  LAN " << ep << "\n";
+    else
+        text << "AOO (LAN/VPN direct): " << ep << "\n";
     if (role == GigmaSessionClient::Role::host)
         text << "Plugin peers: " << s.peers << "  ·  Browser listeners: " << s.listeners
              << (s.relayOn ? "  (relay on)" : "") << "\n";

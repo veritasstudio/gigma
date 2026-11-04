@@ -12,6 +12,25 @@ GigmaSessionClient::GigmaSessionClient (juce::String url)
 {
 }
 
+void GigmaSessionClient::setUseRelay (bool on)
+{
+    const juce::ScopedLock sl (lock);
+    useRelay = on;
+}
+
+juce::String GigmaSessionClient::peerAddress (const juce::String& relay, const juce::String& id,
+                                              const juce::String& lan) const
+{
+    bool relayOn;
+    {
+        const juce::ScopedLock sl (lock);
+        relayOn = useRelay;
+    }
+    if (relayOn && relay.isNotEmpty() && id.length() == 16)
+        return "relay:" + id;
+    return lan;
+}
+
 juce::String GigmaSessionClient::postJson (const juce::String& path, const juce::String& jsonBody, int& statusCode)
 {
     statusCode = 0;
@@ -79,6 +98,7 @@ GigmaSessionResult GigmaSessionClient::createAndClaimHost (const juce::String& t
     out.hostId = hid;
     out.meetingUrl = murl;
     out.relay = hostTree.getProperty ("relay", {}).toString();
+    out.relaySecret = hid;
     return out;
 }
 
@@ -122,6 +142,9 @@ GigmaSessionResult GigmaSessionClient::joinAsPlugin (const juce::String& linkOrI
     out.guestId = gid;
     out.meetingUrl = brokerUrl + "/m/" + sid;
     out.hostEndpoint = tree.getProperty ("aooEndpoint", {}).toString();
+    out.hostPeerId = tree.getProperty ("hostPeerId", {}).toString();
+    out.relaySecret = tree.getProperty ("token", {}).toString();
+    out.relay = tree.getProperty ("relay", {}).toString();
     return out;
 }
 
@@ -163,10 +186,12 @@ GigmaHeartbeat GigmaSessionClient::heartbeat (const juce::String& aooEndpoint)
     {
         if (auto* arr = tree.getProperty ("peers", juce::var()).getArray())
             for (auto& p : *arr)
-                if (auto ep = p.getProperty ("aooEndpoint", {}).toString(); ep.isNotEmpty())
+                if (auto ep = peerAddress (hb.relay, p.getProperty ("id", {}).toString(),
+                                           p.getProperty ("aooEndpoint", {}).toString()); ep.isNotEmpty())
                     hb.peers.addIfNotAlreadyThere (ep);
     }
-    else if (auto ep = tree.getProperty ("aooEndpoint", {}).toString(); ep.isNotEmpty())
+    else if (auto ep = peerAddress (hb.relay, tree.getProperty ("hostPeerId", {}).toString(),
+                                    tree.getProperty ("aooEndpoint", {}).toString()); ep.isNotEmpty())
     {
         hb.peers.add (ep);
     }

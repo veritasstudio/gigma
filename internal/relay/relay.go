@@ -15,6 +15,8 @@
 //
 // WebSocket binary frame sent to browsers: bytes [36:] of the UDP packet
 // (seq, sampleRate, channels, reserved, samples) — the host token is stripped.
+//
+// The same UDP port also relays plugin↔plugin AOO traffic ("GGR1", see peer.go).
 package relay
 
 import (
@@ -22,6 +24,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 const headerLen = 48
@@ -32,13 +35,38 @@ var magic = []byte("GGM1")
 type HostAuth func(sessionID, hostID string) bool
 
 type Hub struct {
-	mu   sync.RWMutex
-	subs map[string]map[chan []byte]struct{}
-	auth HostAuth
+	mu    sync.RWMutex
+	subs  map[string]map[chan []byte]struct{}
+	auth  HostAuth
+	peers *peerTable
 }
 
-func New(auth HostAuth) *Hub {
-	return &Hub{subs: map[string]map[chan []byte]struct{}{}, auth: auth}
+// New builds a hub. peerAuth may be nil to disable the plugin↔plugin relay.
+func New(auth HostAuth, peerAuth PeerAuth) *Hub {
+	h := &Hub{subs: map[string]map[chan []byte]struct{}{}, auth: auth}
+	if peerAuth != nil {
+		h.peers = newPeerTable(peerAuth)
+	}
+	return h
+}
+
+// RelayedPeers returns the peer IDs of sessionID currently registered on the
+// AOO relay (nil if the peer relay is disabled).
+func (h *Hub) RelayedPeers(sessionID string) map[string]bool {
+	if h.peers == nil {
+		return nil
+	}
+	return h.peers.relayed(sessionID, time.Now())
+}
+
+// PeerStats returns plugin↔plugin relay counters.
+func (h *Hub) PeerStats() PeerStats {
+	if h.peers == nil {
+		return PeerStats{}
+	}
+	h.peers.mu.Lock()
+	defer h.peers.mu.Unlock()
+	return h.peers.stats
 }
 
 // Subscribe registers a listener; call the returned func to unsubscribe.
@@ -83,18 +111,37 @@ func (h *Hub) publish(sessionID string, frame []byte) {
 
 // ListenUDP serves the ingest socket until it fails.
 func (h *Hub) ListenUDP(addr string) error {
-	conn, err := net.ListenPacket("udp", addr)
+	ua, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return err
 	}
-	log.Printf("gigma audio relay listening on udp %s", addr)
+	conn, err := net.ListenUDP("udp", ua)
+	if err != nil {
+		return err
+	}
+	_ = conn.SetReadBuffer(4 << 20)
+	_ = conn.SetWriteBuffer(4 << 20)
+	log.Printf("gigma audio relay listening on udp %s (browser ingest + AOO peer relay)", addr)
+	if h.peers != nil {
+		go func() {
+			for range time.Tick(10 * time.Second) {
+				h.peers.gc(time.Now())
+			}
+		}()
+	}
 	buf := make([]byte, 65536)
 	var lastSess, lastHost string
 	lastOK := false
 	for {
-		n, _, err := conn.ReadFrom(buf)
+		n, from, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			return err
+		}
+		if h.peers != nil && n >= 4 && bytes.Equal(buf[:4], peerMagic) {
+			if to, out := h.peers.handle(buf[:n], from, time.Now()); to != nil {
+				_, _ = conn.WriteToUDP(out, to)
+			}
+			continue
 		}
 		if n <= headerLen || !bytes.Equal(buf[:4], magic) {
 			continue

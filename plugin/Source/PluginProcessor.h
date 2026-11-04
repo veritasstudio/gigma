@@ -42,7 +42,8 @@ public:
     GigmaSessionResult joinMeeting (const juce::String& linkOrId);
 
     /** Live status for the editor. */
-    struct Status { int peers = 0; int listeners = 0; bool relayOn = false; bool brokerOk = false; bool hostLive = false; };
+    struct Status { int peers = 0; int listeners = 0; bool relayOn = false; bool brokerOk = false; bool hostLive = false;
+                    bool peerRelayOn = false; bool peerRelayUp = false; };
     Status status() const;
 
 private:

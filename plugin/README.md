@@ -7,8 +7,10 @@ FX plugin (VST3 + AU) the producer loads in their DAW.
 `GigmaAooEngine` captures DAW input in `processBlock`, sends via **AOO** (Audio over OSC — same family SonoBus uses), and mixes received remote audio to the DAW output. UDP endpoint is advertised to the Go broker as `aooEndpoint` when claiming host.
 
 In the plugin window: **New meeting (host)** creates a link (share it), or paste someone's link and
-**Join as plugin**. Status shows the advertised `AOO: <LAN-IP>:<port>`, plugin peers, and browser
-listeners. Output = your dry input + whatever remote plugins send you.
+**Join as plugin**. Status shows `Internet: connected via Gigma relay` (plugin↔plugin audio goes
+through the VPS relay so it works across any NAT), plugin peers, and browser listeners. Output =
+your dry input + whatever remote plugins send you. Launch the DAW with `GIGMA_DIRECT=1` to use
+LAN/VPN direct UDP instead of the relay.
 
 Build with AOO (deps live in `third_party/`, git-ignored):
 

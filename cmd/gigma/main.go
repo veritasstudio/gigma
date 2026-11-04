@@ -34,6 +34,13 @@ func main() {
 	hub := relay.New(func(sid, hid string) bool {
 		h, ok := plugins.Get(sid)
 		return ok && h.HostID == hid
+	}, func(sid, secret string) (string, bool) {
+		// Plugin↔plugin AOO relay: host authenticates with its hostId, plugin
+		// guests with the token they got on join. Returns the public peer ID.
+		if h, ok := plugins.Get(sid); ok && h.HostID == secret {
+			return h.PeerID, true
+		}
+		return store.GuestByToken(sid, secret)
 	})
 	if relayAddr != "off" {
 		go func() {
@@ -46,11 +53,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":     true,
-			"role":   "meeting-link-broker",
-			"audio":  "plugin-owned (AOO p2p) + browser relay",
-			"relay":  relayPublic,
-			"public": publicBase,
+			"ok":        true,
+			"role":      "meeting-link-broker",
+			"audio":     "plugin-owned (AOO p2p) + browser relay",
+			"relay":     relayPublic,
+			"peerRelay": hub.PeerStats(),
+			"public":    publicBase,
 		})
 	})
 
@@ -87,7 +95,7 @@ func main() {
 			"listeners": hub.Listeners(id),
 		}
 		if hasHost {
-			resp["host"] = host
+			resp["host"] = host.Public()
 			resp["hostLive"] = time.Since(host.SeenAt) < peerMaxAge
 		}
 		writeJSON(w, http.StatusOK, resp)
@@ -112,9 +120,15 @@ func main() {
 			"session": map[string]any{"id": s.ID, "title": s.Title, "guests": s.Guests},
 			"hasHost": hasHost,
 		}
+		if g.Kind == "plugin" {
+			// Secret for the AOO peer relay; only ever sent to this guest.
+			resp["token"] = g.Token
+			resp["relay"] = relayPublic
+		}
 		if hasHost {
-			resp["host"] = host
+			resp["host"] = host.Public()
 			resp["aooEndpoint"] = host.AOOEndpoint
+			resp["hostPeerId"] = host.PeerID
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})
@@ -152,9 +166,19 @@ func main() {
 			http.Error(w, "unknown host", http.StatusConflict)
 			return
 		}
+		relayed := hub.RelayedPeers(id)
+		peers := []map[string]any{}
+		for _, g := range store.PluginPeers(id, peerMaxAge) {
+			peers = append(peers, map[string]any{
+				"id":          g.ID,
+				"name":        g.Name,
+				"aooEndpoint": g.AOOEndpoint,
+				"relayed":     relayed[g.ID],
+			})
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":        true,
-			"peers":     store.PluginPeers(id, peerMaxAge),
+			"peers":     peers,
 			"listeners": hub.Listeners(id),
 			"relay":     relayPublic,
 		})
@@ -171,10 +195,12 @@ func main() {
 			http.Error(w, "unknown guest", http.StatusNotFound)
 			return
 		}
-		resp := map[string]any{"ok": true}
+		resp := map[string]any{"ok": true, "relay": relayPublic}
 		if host, ok := plugins.Get(id); ok {
 			resp["aooEndpoint"] = host.AOOEndpoint
+			resp["hostPeerId"] = host.PeerID
 			resp["hostLive"] = time.Since(host.SeenAt) < peerMaxAge
+			resp["hostRelayed"] = hub.RelayedPeers(id)[host.PeerID]
 		}
 		writeJSON(w, http.StatusOK, resp)
 	})

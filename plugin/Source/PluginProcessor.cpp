@@ -7,6 +7,9 @@ GigmaAudioProcessor::GigmaAudioProcessor()
           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       juce::Thread ("Gigma broker sync")
 {
+    // Internet relay by default (works across any NAT). GIGMA_DIRECT=1 forces
+    // LAN/VPN-only direct UDP for the lowest possible latency.
+    sessionClient.setUseRelay (juce::SystemStats::getEnvironmentVariable ("GIGMA_DIRECT", {}).isEmpty());
     startThread();
 }
 
@@ -23,6 +26,8 @@ GigmaSessionResult GigmaAudioProcessor::hostNewMeeting()
     {
         aooEngine.setRelay (result.relay.toStdString(), result.sessionId.toStdString(),
                             result.hostId.toStdString());
+        aooEngine.setPeerRelay (result.relay.toStdString(), result.sessionId.toStdString(),
+                                result.relaySecret.toStdString());
         aooEngine.syncPeers ({});
         meetingUrl = result.meetingUrl;
         notify();
@@ -38,8 +43,14 @@ GigmaSessionResult GigmaAudioProcessor::joinMeeting (const juce::String& linkOrI
     {
         aooEngine.setRelay ({}, {}, {});       // guests don't feed the browser relay
         aooEngine.setRelayEnabled (false);
+        aooEngine.setPeerRelay (result.relay.toStdString(), result.sessionId.toStdString(),
+                                result.relaySecret.toStdString());
         std::set<std::string> wanted;
-        if (result.hostEndpoint.isNotEmpty())
+        const bool viaRelay = aooEngine.peerRelayConfigured() && result.hostPeerId.length() == 16
+                              && juce::SystemStats::getEnvironmentVariable ("GIGMA_DIRECT", {}).isEmpty();
+        if (viaRelay)
+            wanted.insert ("relay:" + result.hostPeerId.toStdString());
+        else if (result.hostEndpoint.isNotEmpty())
             wanted.insert (result.hostEndpoint.toStdString());
         aooEngine.syncPeers (wanted);          // send our audio back to the host
         meetingUrl = result.meetingUrl;
@@ -56,6 +67,8 @@ GigmaAudioProcessor::Status GigmaAudioProcessor::status() const
     s.relayOn = aooEngine.relayActive();
     s.brokerOk = statBrokerOk.load();
     s.hostLive = statHostLive.load();
+    s.peerRelayOn = aooEngine.peerRelayConfigured();
+    s.peerRelayUp = aooEngine.peerRelayUp();
     return s;
 }
 

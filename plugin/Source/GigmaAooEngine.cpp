@@ -73,6 +73,27 @@ void putFixed16 (unsigned char* p, const std::string& s)
     std::memset (p, '0', 16);
     std::memcpy (p, s.data(), std::min<size_t> (16, s.size()));
 }
+
+constexpr const char* kRelayPrefix = "relay:";
+constexpr size_t kPeerHdrOut = 52;   // GGR1 | session | secret | dst
+constexpr size_t kPeerHdrIn = 20;    // GGR1 | src
+const std::string kZeroId (16, '0');
+
+int64_t nowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds> (
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+bool sameAddr (const std::vector<unsigned char>& a, const void* b, size_t blen)
+{
+    if (a.size() < sizeof (sockaddr_in) || blen < sizeof (sockaddr_in))
+        return false;
+    auto* x = (const sockaddr_in*) a.data();
+    auto* y = (const sockaddr_in*) b;
+    return x->sin_family == y->sin_family && x->sin_port == y->sin_port
+        && x->sin_addr.s_addr == y->sin_addr.s_addr;
+}
 } // namespace
 
 #if GIGMA_HAS_AOO
@@ -100,6 +121,8 @@ AooInt32 AOO_CALL GigmaAooEngine::udpSend (void* user, const AooByte* data, AooI
     auto* self = static_cast<GigmaAooEngine*> (user);
     if (self->udpSock < 0)
         return -1;
+    if (self->sendViaPeerRelay (data, (size_t) size, address, (size_t) addrlen))
+        return size;
     return (AooInt32) ::sendto (self->udpSock, data, (size_t) size, 0,
                                 (const sockaddr*) address, (socklen_t) addrlen);
 }
@@ -298,7 +321,8 @@ void GigmaAooEngine::syncPeers (const std::set<std::string>& wanted)
     {
         if (hp == self || peers.count (hp))
             continue;
-        auto addr = resolveHostPort (hp);
+        auto addr = hp.rfind (kRelayPrefix, 0) == 0 ? relayAddrFor (hp.substr (std::strlen (kRelayPrefix)))
+                                                     : resolveHostPort (hp);
         if (addr.empty())
             continue;
 #if GIGMA_HAS_AOO
@@ -327,6 +351,147 @@ void GigmaAooEngine::setRelay (const std::string& relayHostPort, const std::stri
     relaySession = sessionId;
     relayHost = hostId;
     relayConfigured = ! relayAddr.empty() && ! sessionId.empty() && ! hostId.empty();
+}
+
+void GigmaAooEngine::setPeerRelay (const std::string& relayHostPort, const std::string& sessionId,
+                                   const std::string& secret)
+{
+    auto addr = relayHostPort.empty() ? std::vector<unsigned char>() : resolveHostPort (relayHostPort);
+    std::lock_guard<std::mutex> lock (prMutex);
+    const bool changed = addr != prAddr || sessionId != prSession || secret != prSecret;
+    prAddr = std::move (addr);
+    prSession = sessionId;
+    prSecret = secret;
+    peerRelayOn = ! prAddr.empty() && sessionId.size() == 16 && secret.size() == 16;
+    if (changed)
+    {
+        prLastAckMs = 0;
+        prLastKeepaliveMs = 0;   // register right away
+    }
+}
+
+bool GigmaAooEngine::peerRelayUp() const
+{
+    const auto t = prLastAckMs.load();
+    return peerRelayOn.load() && t > 0 && nowMs() - t < 5000;
+}
+
+std::vector<unsigned char> GigmaAooEngine::relayAddrFor (const std::string& peerId)
+{
+    if (peerId.size() != 16)
+        return {};
+    std::lock_guard<std::mutex> lock (prMutex);
+    uint16_t idx;
+    if (auto it = prIdToIdx.find (peerId); it != prIdToIdx.end())
+        idx = it->second;
+    else
+    {
+        if (prIdxToId.size() >= 0xffff)
+            return {};
+        idx = (uint16_t) prIdxToId.size();
+        prIdxToId.push_back (peerId);
+        prIdToIdx.emplace (peerId, idx);
+    }
+    // 240.0.0.0/4 is reserved (never routable), so it can't collide with a real peer.
+    sockaddr_in sa {};
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons (1);
+    sa.sin_addr.s_addr = htonl ((240u << 24) | (uint32_t) idx);
+#if defined(__APPLE__)
+    sa.sin_len = sizeof (sa);
+#endif
+    return std::vector<unsigned char> ((const unsigned char*) &sa, (const unsigned char*) &sa + sizeof (sa));
+}
+
+std::string GigmaAooEngine::relayIdFor (const void* addr, size_t len)
+{
+    if (addr == nullptr || len < sizeof (sockaddr_in))
+        return {};
+    auto* sa = (const sockaddr_in*) addr;
+    if (sa->sin_family != AF_INET)
+        return {};
+    const uint32_t ip = ntohl (sa->sin_addr.s_addr);
+    if ((ip >> 24) != 240u || ntohs (sa->sin_port) != 1)
+        return {};
+    const auto idx = (size_t) (ip & 0xffffu);
+    std::lock_guard<std::mutex> lock (prMutex);
+    return idx > 0 && idx < prIdxToId.size() ? prIdxToId[idx] : std::string();
+}
+
+bool GigmaAooEngine::sendViaPeerRelay (const unsigned char* data, size_t size, const void* addr, size_t len)
+{
+    const auto id = relayIdFor (addr, len);
+    if (id.empty())
+        return false;   // real address: caller sends directly
+    std::lock_guard<std::mutex> lock (prMutex);
+    if (! peerRelayOn.load() || udpSock < 0)
+        return true;    // placeholder but no relay: drop (never sendto 240.x)
+    prScratch.resize (kPeerHdrOut + size);
+    std::memcpy (prScratch.data(), "GGR1", 4);
+    putFixed16 (prScratch.data() + 4, prSession);
+    putFixed16 (prScratch.data() + 20, prSecret);
+    putFixed16 (prScratch.data() + 36, id);
+    std::memcpy (prScratch.data() + kPeerHdrOut, data, size);
+    ::sendto (udpSock, prScratch.data(), prScratch.size(), 0,
+              (const sockaddr*) prAddr.data(), (socklen_t) prAddr.size());
+    return true;
+}
+
+void GigmaAooEngine::sendPeerKeepalive()
+{
+    if (! peerRelayOn.load())
+        return;
+    const auto t = nowMs();
+    std::lock_guard<std::mutex> lock (prMutex);
+    // 1 s cadence: registers our public address with the relay and keeps the
+    // NAT mapping open even when no audio is flowing.
+    if (prAddr.empty() || t - prLastKeepaliveMs < 1000)
+        return;
+    prLastKeepaliveMs = t;
+    unsigned char pkt[kPeerHdrOut];
+    std::memcpy (pkt, "GGR1", 4);
+    putFixed16 (pkt + 4, prSession);
+    putFixed16 (pkt + 20, prSecret);
+    std::memcpy (pkt + 36, kZeroId.data(), 16);
+    ::sendto (udpSock, pkt, sizeof (pkt), 0, (const sockaddr*) prAddr.data(), (socklen_t) prAddr.size());
+}
+
+bool GigmaAooEngine::handlePeerRelayPacket (const unsigned char* data, size_t n, const void* from, size_t fromLen)
+{
+    if (n < kPeerHdrIn || std::memcmp (data, "GGR1", 4) != 0)
+        return false;
+    {
+        std::lock_guard<std::mutex> lock (prMutex);
+        if (! sameAddr (prAddr, from, fromLen))
+            return false;
+    }
+    const std::string src ((const char*) data + 4, 16);
+    if (src == kZeroId)
+    {
+        prLastAckMs = nowMs();
+        return true;
+    }
+    prLastAckMs = nowMs();   // relay is clearly up if it forwards to us
+#if GIGMA_HAS_AOO
+    auto fake = relayAddrFor (src);
+    if (fake.empty() || n == kPeerHdrIn)
+        return true;
+    const auto* payload = (const AooByte*) data + kPeerHdrIn;
+    const auto len = (AooInt32) (n - kPeerHdrIn);
+    std::lock_guard<std::mutex> lock (peerMutex);
+    if (aoo)
+    {
+        AooMsgType type; AooId id; AooInt32 off;
+        if (aoo_parsePattern (payload, len, &type, &id, &off) == kAooOk)
+        {
+            if (type == kAooMsgTypeSource && aoo->source)
+                aoo->source->handleMessage (payload, len, fake.data(), (AooAddrSize) fake.size());
+            else if (type == kAooMsgTypeSink && aoo->sink)
+                aoo->sink->handleMessage (payload, len, fake.data(), (AooAddrSize) fake.size());
+        }
+    }
+#endif
+    return true;
 }
 
 void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
@@ -468,6 +633,7 @@ void GigmaAooEngine::networkThreadMain()
         }
 #endif
         drainRelay();
+        sendPeerKeepalive();
 
         bool got = false;
         for (int k = 0; k < 64; ++k)
@@ -479,6 +645,8 @@ void GigmaAooEngine::networkThreadMain()
             if (n <= 0)
                 break;
             got = true;
+            if (handlePeerRelayPacket ((const unsigned char*) buf.data(), (size_t) n, &from, (size_t) fromLen))
+                continue;
 #if GIGMA_HAS_AOO
             std::lock_guard<std::mutex> lock (peerMutex);
             if (aoo)

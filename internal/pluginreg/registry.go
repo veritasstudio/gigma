@@ -10,7 +10,8 @@ import (
 // Host is the producer DAW plugin that owns the session audio endpoint.
 type Host struct {
 	SessionID   string    `json:"sessionId"`
-	HostID      string    `json:"hostId"`
+	HostID      string    `json:"hostId"` // secret: only returned to the claiming plugin
+	PeerID      string    `json:"peerId"` // public id other plugins address over the AOO relay
 	Label       string    `json:"label"`
 	AOOEndpoint string    `json:"aooEndpoint,omitempty"` // host:port for AOO UDP
 	SeenAt      time.Time `json:"seenAt"`
@@ -29,6 +30,7 @@ func (r *Registry) Claim(sessionID, label, aooEndpoint string) *Host {
 	h := &Host{
 		SessionID:   sessionID,
 		HostID:      newID(),
+		PeerID:      newID(),
 		Label:       label,
 		AOOEndpoint: aooEndpoint,
 		SeenAt:      time.Now().UTC(),
@@ -68,4 +70,16 @@ func newID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// PublicHost is what anyone holding the meeting link may see (no secret HostID).
+type PublicHost struct {
+	Label       string    `json:"label"`
+	PeerID      string    `json:"peerId"`
+	AOOEndpoint string    `json:"aooEndpoint,omitempty"`
+	SeenAt      time.Time `json:"seenAt"`
+}
+
+func (h *Host) Public() PublicHost {
+	return PublicHost{Label: h.Label, PeerID: h.PeerID, AOOEndpoint: h.AOOEndpoint, SeenAt: h.SeenAt}
 }
