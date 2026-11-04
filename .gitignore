@@ -78,3 +78,11 @@ bin/
 *.out
 coverage.out
 vendor/
+
+# Plugin / JUCE
+plugin/build/
+plugin/Builds/
+**/JuceLibraryCode/
+*.vst3
+*.component
+*.appex

@@ -12,41 +12,40 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/veritasstudio/gigma/internal/pluginreg"
 	"github.com/veritasstudio/gigma/internal/session"
-	"github.com/veritasstudio/gigma/internal/sonobus"
 )
 
 func main() {
 	addr := env("GIGMA_ADDR", ":8080")
 	publicBase := strings.TrimRight(env("GIGMA_PUBLIC_BASE", "https://gigma.veritas.org.in"), "/")
-	bin := env("SONOBUS_BIN", "sonobus")
 	webDir := env("GIGMA_WEB", "web/static")
 
 	store := session.NewStore()
-	sb := sonobus.NewManager(bin)
+	plugins := pluginreg.New()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      true,
-			"sonobus": sb.Status(),
+			"role":    "meeting-link-broker",
+			"audio":   "plugin-owned",
+			"public":  publicBase,
 		})
 	})
 
+	// Host (producer plugin or web) creates a shareable meeting link.
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Title string `json:"title"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		s := store.Create(body.Title)
-		if err := sb.EnsureRunning(s.ID); err != nil {
-			log.Printf("sonobus start (session %s): %v", s.ID, err)
-		}
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":   s.ID,
+			"id":    s.ID,
 			"title": s.Title,
-			"path": "/m/" + s.ID,
-			"url":  publicBase + "/m/" + s.ID,
+			"path":  "/m/" + s.ID,
+			"url":   publicBase + "/m/" + s.ID,
 		})
 	})
 
@@ -57,44 +56,62 @@ func main() {
 			http.Error(w, "session not found", http.StatusNotFound)
 			return
 		}
+		host, hasHost := plugins.Get(id)
+		resp := map[string]any{
+			"id":       s.ID,
+			"title":    s.Title,
+			"path":     "/m/" + s.ID,
+			"url":      publicBase + "/m/" + s.ID,
+			"open":     true,
+			"hasHost":  hasHost,
+		}
+		if hasHost {
+			resp["host"] = host
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+
+	// Producer DAW plugin claims a session as the audio endpoint.
+	mux.HandleFunc("POST /api/sessions/{id}/host", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if _, ok := store.Get(id); !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		var body struct {
+			Label string `json:"label"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Label == "" {
+			body.Label = "Gigma Plugin"
+		}
+		h := plugins.Claim(id, body.Label)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"id":      s.ID,
-			"title":   s.Title,
-			"path":    "/m/" + s.ID,
-			"url":     publicBase + "/m/" + s.ID,
-			"sonobus": sb.Status(),
+			"host": h,
+			"url":  publicBase + "/m/" + id,
 		})
 	})
 
-	mux.HandleFunc("POST /api/sonobus/start", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/sessions/{id}/host/heartbeat", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
 		var body struct {
-			SessionID string `json:"sessionId"`
+			HostID string `json:"hostId"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if err := sb.EnsureRunning(body.SessionID); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "status": sb.Status()})
+		if !plugins.Heartbeat(id, body.HostID) {
+			http.Error(w, "unknown host", http.StatusConflict)
 			return
 		}
-		writeJSON(w, http.StatusOK, sb.Status())
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
-	mux.HandleFunc("POST /api/sonobus/stop", func(w http.ResponseWriter, r *http.Request) {
-		sb.Stop()
-		writeJSON(w, http.StatusOK, sb.Status())
-	})
-
-	mux.HandleFunc("GET /api/sonobus/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, sb.Status())
-	})
-
-	// Meeting pages — Zoom-style join via link
+	// Open sessions: join page is name + Join only (no login/password).
 	mux.HandleFunc("GET /m/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if _, ok := store.Get(id); !ok {
 			http.NotFound(w, r)
 			return
 		}
-		// Open sessions: no login/password — join page is name + Join only.
 		http.ServeFile(w, r, filepath.Join(webDir, "meeting.html"))
 	})
 
@@ -111,7 +128,7 @@ func main() {
 
 	srv := &http.Server{Addr: addr, Handler: logging(mux)}
 	go func() {
-		log.Printf("gigma listening on %s (public base %s)", addr, publicBase)
+		log.Printf("gigma broker listening on %s (public base %s)", addr, publicBase)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -122,7 +139,6 @@ func main() {
 	<-stop
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	sb.Stop()
 	_ = srv.Shutdown(ctx)
 }
 
