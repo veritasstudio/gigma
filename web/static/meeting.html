@@ -3,42 +3,50 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gigma meeting</title>
+  <title>Join · Gigma</title>
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body class="meeting">
-  <header class="topbar">
-    <a class="brand-mini" href="/">Gigma</a>
-    <span id="meeting-title">Meeting</span>
-    <span id="meeting-id" class="muted"></span>
-  </header>
+<body>
+  <main class="shell join">
+    <header class="brand">
+      <div class="logo">G</div>
+      <div>
+        <h1>Join session</h1>
+        <p class="muted">Open link · enter your name · go. No login.</p>
+      </div>
+    </header>
 
-  <main class="stage">
-    <div class="tile self">You</div>
-    <div class="tile guest muted-tile">Waiting for others…</div>
+    <section class="card">
+      <label for="name">Your name</label>
+      <input id="name" type="text" placeholder="Your name" autocomplete="nickname" autofocus />
+      <button id="join" class="primary" type="button">Join</button>
+      <p id="err" class="error" hidden></p>
+    </section>
   </main>
 
-  <footer class="controls">
-    <button id="mute" type="button" aria-pressed="false">Mute</button>
-    <button id="copy" type="button">Copy link</button>
-    <a class="danger" href="/">Leave</a>
-  </footer>
-
   <script>
-    const id = location.pathname.split('/').pop();
-    document.getElementById('meeting-id').textContent = id;
-    fetch('/api/sessions/' + id).then(r => r.json()).then(s => {
-      document.getElementById('meeting-title').textContent = s.title || 'Meeting';
-    }).catch(() => {});
-    document.getElementById('mute').onclick = (e) => {
-      const b = e.currentTarget;
-      const on = b.getAttribute('aria-pressed') === 'true';
-      b.setAttribute('aria-pressed', String(!on));
-      b.textContent = on ? 'Mute' : 'Unmute';
-    };
-    document.getElementById('copy').onclick = async () => {
-      await navigator.clipboard.writeText(location.href);
-    };
+    const id = location.pathname.split('/').filter(Boolean).pop();
+    const nameEl = document.getElementById('name');
+    const join = document.getElementById('join');
+    const err = document.getElementById('err');
+    const saved = sessionStorage.getItem('gigma:name');
+    if (saved) nameEl.value = saved;
+
+    async function go() {
+      err.hidden = true;
+      const name = nameEl.value.trim();
+      if (!name) {
+        err.textContent = 'Enter your name to join.';
+        err.hidden = false;
+        nameEl.focus();
+        return;
+      }
+      sessionStorage.setItem('gigma:name', name);
+      // Room UI placeholder until live audio wiring lands
+      location.href = '/m/' + id + '/room?name=' + encodeURIComponent(name);
+    }
+    join.onclick = go;
+    nameEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   </script>
 </body>
 </html>

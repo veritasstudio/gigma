@@ -18,7 +18,7 @@ import (
 
 func main() {
 	addr := env("GIGMA_ADDR", ":8080")
-	publicBase := strings.TrimRight(env("GIGMA_PUBLIC_BASE", "http://localhost:8080"), "/")
+	publicBase := strings.TrimRight(env("GIGMA_PUBLIC_BASE", "https://gigma.veritas.org.in"), "/")
 	bin := env("SONOBUS_BIN", "sonobus")
 	webDir := env("GIGMA_WEB", "web/static")
 
@@ -94,7 +94,17 @@ func main() {
 			http.NotFound(w, r)
 			return
 		}
+		// Open sessions: no login/password — join page is name + Join only.
 		http.ServeFile(w, r, filepath.Join(webDir, "meeting.html"))
+	})
+
+	mux.HandleFunc("GET /m/{id}/room", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if _, ok := store.Get(id); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeFile(w, r, filepath.Join(webDir, "room.html"))
 	})
 
 	mux.Handle("GET /", http.FileServer(http.Dir(webDir)))

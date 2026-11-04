@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gigma</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="meeting">
+  <header class="topbar">
+    <a class="brand-mini" href="/">Gigma</a>
+    <span id="meeting-title">Session</span>
+    <span id="you" class="muted"></span>
+  </header>
+  <main class="stage">
+    <div class="tile self" id="self-tile">You</div>
+    <div class="tile guest muted-tile">Open session — anyone with the link can join</div>
+  </main>
+  <footer class="controls">
+    <button id="mute" type="button" aria-pressed="false">Mute</button>
+    <button id="copy" type="button">Copy link</button>
+    <a class="danger" href="/">Leave</a>
+  </footer>
+  <script>
+    const parts = location.pathname.split('/').filter(Boolean);
+    const id = parts[1];
+    const name = new URLSearchParams(location.search).get('name') || sessionStorage.getItem('gigma:name') || 'Guest';
+    document.getElementById('you').textContent = name;
+    document.getElementById('self-tile').textContent = name;
+    fetch('/api/sessions/' + id).then(r => r.json()).then(s => {
+      document.getElementById('meeting-title').textContent = s.title || 'Session';
+    }).catch(() => {});
+    document.getElementById('mute').onclick = (e) => {
+      const b = e.currentTarget;
+      const on = b.getAttribute('aria-pressed') === 'true';
+      b.setAttribute('aria-pressed', String(!on));
+      b.textContent = on ? 'Mute' : 'Unmute';
+    };
+    document.getElementById('copy').onclick = async () => {
+      await navigator.clipboard.writeText(location.origin + '/m/' + id);
+    };
+  </script>
+</body>
+</html>
