@@ -106,12 +106,14 @@
     function renderPeople() {
       const host = lastSession && lastSession.hasHost ? [{ name: (lastSession.host && lastSession.host.label) || 'Producer', role: 'Producer', live: lastSession.hostLive }] : [];
       const rows = host.map((h) => `<li><span class="av">${Gigma.initial(h.name)}</span><span class="nm">${esc(h.name)}</span><span class="tag">${h.live ? 'DAW' : 'offline'}</span></li>`);
-      for (const t of talkers) {
+      const list = talkers.slice();
+      if (listening && myTalker && !list.some((t) => t.id === myTalker)) list.push({ id: myTalker, name });
+      for (const t of list) {
         const me = t.id === myTalker;
         const talking = me ? GigmaTalk.isLive() : (GigmaTalk.speaking(t.id) || t.live);
         rows.push(`<li class="${talking ? 'talking' : ''}"><span class="av">${Gigma.initial(t.name)}</span><span class="nm">${esc(t.name || 'Guest')}${me ? ' (you)' : ''}</span><span class="tag">${talking ? '🎤 on' : 'muted'}</span></li>`);
       }
-      if (!listening && !talkers.length) rows.push('<li class="empty">Tap Listen to join the audio</li>');
+      if (!listening && !list.length) rows.push('<li class="empty">Tap Listen to join the audio</li>');
       peopleEl.innerHTML = rows.join('');
       micLevelEl.style.transform = 'scaleX(' + Math.min(1, GigmaTalk.micLevel() * 2).toFixed(2) + ')';
     }
