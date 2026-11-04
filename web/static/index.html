@@ -2,38 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="description" content="Meeting links for DAW sessions. Share a link, guests listen live." />
   <title>Gigma</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=2" />
 </head>
 <body>
   <main class="shell">
     <header class="brand">
-      <div class="logo">G</div>
+      <div class="logo" aria-hidden="true">G</div>
       <div>
         <h1>Gigma</h1>
-        <p>Meeting links for DAW sessions. Audio lives in the Gigma plugin.</p>
+        <p>Share a link. Guests hear your DAW live.</p>
       </div>
     </header>
 
-    <section class="card">
+    <form class="card" id="start" novalidate>
       <h2>Start a session</h2>
-      <p class="muted">Create a room and share one meeting link. Guests join by opening it — no group name or password.</p>
+      <p class="muted small">One link for everyone. Guests just open it and type their name — no login, no password.</p>
       <label for="title">Session name</label>
-      <input id="title" type="text" placeholder="Friday jam" autocomplete="off" />
-      <button id="create" class="primary">New meeting</button>
-      <p id="err" class="error" hidden></p>
-    </section>
+      <input id="title" type="text" placeholder="Friday jam" autocomplete="off" enterkeyhint="go" maxlength="80" />
+      <button id="create" class="primary block" type="submit">New meeting</button>
+      <p id="err" class="error" role="alert" hidden></p>
+    </form>
 
     <section class="card" id="share" hidden>
-      <h2>Share this link</h2>
-      <div class="row">
-        <input id="link" type="text" readonly />
-        <button id="copy" type="button">Copy</button>
+      <h2>Your meeting link</h2>
+      <input id="link" type="text" readonly aria-label="Meeting link" />
+      <div class="stack">
+        <div class="row">
+          <button id="sharebtn" class="primary" type="button">Share</button>
+          <button id="copy" type="button">Copy</button>
+        </div>
+        <a id="open" class="btn ghost block" href="#">Open meeting page</a>
       </div>
-      <a id="open" class="primary linkish" href="#">Join as host</a>
+      <ol class="steps" style="margin-top:16px">
+        <li>Send the link to guests — they open it, type a name and tap <strong>Listen</strong>.</li>
+        <li>Audio comes from the <strong>Gigma</strong> plugin on your DAW channel.</li>
+      </ol>
     </section>
   </main>
-  <script src="/app.js"></script>
+  <script src="/common.js?v=2"></script>
+  <script src="/app.js?v=2"></script>
 </body>
 </html>

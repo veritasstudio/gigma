@@ -2,35 +2,63 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Join · Gigma</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=2" />
 </head>
 <body>
   <main class="shell join">
     <header class="brand">
-      <div class="logo">G</div>
+      <div class="logo" aria-hidden="true">G</div>
       <div>
         <h1>Join session</h1>
-        <p class="muted">Open link · enter your name · go. No login.</p>
+        <p>Type your name and tap Join. No login.</p>
       </div>
     </header>
-    <section class="card">
+    <form class="card" id="joinform" novalidate>
+      <div class="session-chip" id="chip">
+        <div style="flex:1;min-width:0">
+          <strong id="stitle">Gigma session</strong>
+          <span class="muted" id="sstate">Checking…</span>
+        </div>
+        <span class="pill wait" id="spill">…</span>
+      </div>
       <label for="name">Your name</label>
-      <input id="name" type="text" placeholder="Your name" autocomplete="nickname" autofocus />
-      <button id="join" class="primary" type="button">Join</button>
-      <p id="err" class="error" hidden></p>
-    </section>
+      <input id="name" type="text" placeholder="e.g. Priya" autocomplete="nickname" autocapitalize="words" enterkeyhint="go" maxlength="40" />
+      <button id="join" class="primary block" type="submit">Join</button>
+      <p id="err" class="error" role="alert" hidden></p>
+    </form>
+    <p class="hint">You’ll be able to listen from this phone or browser. Headphones recommended.</p>
   </main>
   <script>
-    const id = location.pathname.split('/').filter(Boolean).pop();
+    const id = location.pathname.split('/').filter(Boolean)[1];
+    const form = document.getElementById('joinform');
     const nameEl = document.getElementById('name');
     const join = document.getElementById('join');
     const err = document.getElementById('err');
-    const saved = sessionStorage.getItem('gigma:name');
+    const saved = sessionStorage.getItem('gigma:name') || localStorage.getItem('gigma:name');
     if (saved) nameEl.value = saved;
+    // Autofocus only on desktop — on phones it pops the keyboard over the page.
+    if (!matchMedia('(pointer: coarse)').matches) nameEl.focus();
 
-    async function go() {
+    fetch('/api/sessions/' + id).then(r => r.ok ? r.json() : Promise.reject()).then(s => {
+      document.getElementById('stitle').textContent = s.title || 'Gigma session';
+      if (s.title) document.title = s.title + ' · Gigma';
+      const pill = document.getElementById('spill'), st = document.getElementById('sstate');
+      if (s.hasHost && s.hostLive) {
+        pill.className = 'pill live'; pill.textContent = 'Live';
+        st.textContent = (s.host && s.host.label ? s.host.label : 'Producer') + ' is online';
+      } else {
+        pill.className = 'pill wait'; pill.textContent = 'Waiting';
+        st.textContent = 'Producer hasn’t started yet — you can still join';
+      }
+    }).catch(() => { document.getElementById('sstate').textContent = 'Couldn’t load session details'; });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
       err.hidden = true;
       const name = nameEl.value.trim();
       if (!name) {
@@ -40,6 +68,7 @@
         return;
       }
       join.disabled = true;
+      join.innerHTML = '<span class="spinner" aria-hidden="true"></span> Joining…';
       try {
         const res = await fetch('/api/sessions/' + id + '/join', {
           method: 'POST',
@@ -47,20 +76,21 @@
           body: JSON.stringify({ name }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'Could not join');
+        if (!res.ok) throw new Error(data.error || (res.status === 404 ? 'This meeting link has expired.' : 'Could not join'));
         sessionStorage.setItem('gigma:name', name);
+        try { localStorage.setItem('gigma:name', name); } catch (_) {}
         sessionStorage.setItem('gigma:guestId', data.guest && data.guest.id || '');
         if (data.aooEndpoint) sessionStorage.setItem('gigma:aoo', data.aooEndpoint);
         location.href = '/m/' + id + '/room?name=' + encodeURIComponent(name);
       } catch (e) {
-        err.textContent = e.message || String(e);
+        err.textContent = (e && e.message) || 'Network error — try again.';
         err.hidden = false;
-      } finally {
         join.disabled = false;
+        join.textContent = 'Join';
       }
-    }
-    join.onclick = go;
-    nameEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    });
+    // Back-forward cache: reset the button if the user swipes back.
+    addEventListener('pageshow', () => { join.disabled = false; join.textContent = 'Join'; });
   </script>
 </body>
 </html>

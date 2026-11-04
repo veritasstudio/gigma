@@ -2,65 +2,127 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f14" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Gigma</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=2" />
 </head>
-<body class="meeting">
-  <header class="topbar">
-    <a class="brand-mini" href="/">Gigma</a>
-    <span id="meeting-title">Session</span>
-    <span id="you" class="muted"></span>
-  </header>
-  <main class="stage">
-    <div class="tile self" id="self-tile">You</div>
-    <div class="tile host" id="host-tile">
-      <span id="host-label">Producer</span>
-      <small id="host-state">Waiting for the producer’s Gigma plugin…</small>
-      <div class="meter"><i id="meter"></i></div>
-    </div>
-  </main>
-  <footer class="controls">
-    <button id="listen" class="primary" type="button">Listen</button>
-    <button id="mute" type="button" aria-pressed="false" disabled>Mute</button>
-    <button id="copy" type="button">Copy link</button>
-    <a class="danger" href="/">Leave</a>
-  </footer>
+<body>
+  <div class="room">
+    <header class="topbar">
+      <a class="logo" href="/" aria-label="Gigma home">G</a>
+      <div class="titles">
+        <strong id="meeting-title">Session</strong>
+        <span>You’re in as <b id="you"></b></span>
+      </div>
+      <button id="share" class="icon-btn ghost" type="button">Invite</button>
+      <a id="leave" class="btn icon-btn danger" href="/">Leave</a>
+    </header>
+
+    <main class="stage">
+      <section class="host-card" id="host-tile" aria-live="polite">
+        <div class="avatar" id="host-avatar" aria-hidden="true">P</div>
+        <h2 id="host-label">Producer</h2>
+        <span class="pill wait" id="host-pill">Waiting</span>
+        <p class="status-text" id="host-state">Waiting for the producer’s Gigma plugin…</p>
+        <div class="meter" id="meter" role="meter" aria-label="Audio level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+      </section>
+
+      <div class="info-grid">
+        <div class="stat"><span>Listeners</span><strong id="listeners">—</strong></div>
+        <div class="stat"><span>Connection</span><strong id="conn">Not listening</strong></div>
+      </div>
+
+      <div class="card vol" style="margin:0">
+        <span>Volume</span>
+        <input id="volume" type="range" min="0" max="1.5" step="0.01" value="1" aria-label="Volume" />
+      </div>
+
+      <p class="hint" id="tip">Tap <b>Listen</b> to start. On iPhone, turn the ring/silent switch off if you hear nothing.</p>
+    </main>
+
+    <footer class="controls">
+      <div class="inner">
+        <button id="listen" class="primary" type="button">▶&nbsp; Listen</button>
+        <button id="mute" type="button" aria-pressed="false" disabled>Mute</button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="/common.js?v=2"></script>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
     const id = parts[1];
+    const meetingUrl = location.origin + '/m/' + id;
     const name = new URLSearchParams(location.search).get('name') || sessionStorage.getItem('gigma:name') || 'Guest';
-    document.getElementById('you').textContent = name;
-    document.getElementById('self-tile').textContent = name;
-    const hostTile = document.getElementById('host-tile');
-    const hostState = document.getElementById('host-state');
-    const meter = document.getElementById('meter');
-    const listenBtn = document.getElementById('listen');
-    const muteBtn = document.getElementById('mute');
+    const $ = (x) => document.getElementById(x);
+    $('you').textContent = name;
+    const hostTile = $('host-tile'), hostState = $('host-state'), hostPill = $('host-pill');
+    const listenBtn = $('listen'), muteBtn = $('mute'), volEl = $('volume'), connEl = $('conn');
+    let title = 'Session';
 
-    let listening = false, lastAudioAt = 0;
+    // ---- Level meter: 16 bars, smoothed with decay ----
+    const BARS = 16, meterEl = $('meter'), bars = [];
+    for (let i = 0; i < BARS; i++) { const b = document.createElement('i'); meterEl.appendChild(b); bars.push(b); }
+    let level = 0, peakIn = 0;
+    function drawMeter() {
+      level = Math.max(peakIn, level * 0.9);
+      peakIn = 0;
+      const lit = Math.round(Math.min(1, level * 1.4) * BARS);
+      for (let i = 0; i < BARS; i++) {
+        const on = i < lit;
+        bars[i].className = on ? (i >= BARS - 2 ? 'on clip' : i >= BARS - 5 ? 'on hot' : 'on') : '';
+      }
+      meterEl.setAttribute('aria-valuenow', String(Math.round(level * 100)));
+      requestAnimationFrame(drawMeter);
+    }
+    requestAnimationFrame(drawMeter);
 
+    let listening = false, lastAudioAt = 0, wsOpen = false;
+
+    function setPill(kind, text) { hostPill.className = 'pill ' + kind; hostPill.textContent = text; }
+    function render(s) {
+      const streaming = listening && Date.now() - lastAudioAt < 1500;
+      hostTile.classList.toggle('live', streaming);
+      if (streaming) { setPill('live', 'Live'); hostState.textContent = 'You’re hearing the DAW'; }
+      else if (s && s.hasHost && s.hostLive) {
+        setPill('ready', 'Online');
+        hostState.textContent = listening ? 'Connected — waiting for audio (is the DAW playing?)' : 'Producer is online — tap Listen';
+      } else { setPill('wait', 'Waiting'); hostState.textContent = 'Waiting for the producer’s Gigma plugin…'; }
+      if (!listening) connEl.textContent = 'Not listening';
+      else if (!wsOpen) connEl.textContent = 'Connecting…';
+      else connEl.textContent = streaming ? 'Good' : 'Connected';
+    }
+    let lastSession = null;
     async function poll() {
       try {
-        const s = await (await fetch('/api/sessions/' + id)).json();
-        document.getElementById('meeting-title').textContent = s.title || 'Session';
-        if (s.host) document.getElementById('host-label').textContent = s.host.label || 'Producer';
-        const streaming = Date.now() - lastAudioAt < 1500;
-        hostTile.classList.toggle('live', streaming);
-        if (streaming) hostState.textContent = 'Live from the DAW';
-        else if (s.hasHost && s.hostLive) hostState.textContent = listening ? 'Connected — waiting for audio (is the DAW playing?)' : 'Producer is online — press Listen';
-        else hostState.textContent = 'Waiting for the producer’s Gigma plugin…';
+        const r = await fetch('/api/sessions/' + id, { cache: 'no-store' });
+        if (r.status === 404) { hostState.textContent = 'This meeting has ended.'; setPill('wait', 'Ended'); return; }
+        const s = await r.json();
+        lastSession = s;
+        title = s.title || 'Session';
+        $('meeting-title').textContent = title;
+        document.title = title + ' · Gigma';
+        const label = (s.host && s.host.label) || 'Producer';
+        $('host-label').textContent = label;
+        $('host-avatar').textContent = Gigma.initial(label);
+        $('listeners').textContent = String(s.listeners || 0);
       } catch (_) {}
+      render(lastSession);
     }
     poll(); setInterval(poll, 2000);
+    setInterval(() => render(lastSession), 500);
 
     // ---- Relay player: PCM16 frames over WebSocket → Web Audio ----
     // Frame: seq u32 | sampleRate u32 | channels u8 | 3 reserved | int16 LE interleaved
     let ctx, gain, ws, nextTime = 0, pending = [], pendingFrames = 0, pendingRate = 48000, pendingCh = 2;
+    let muted = false, wakeLock = null, retry = null;
     const TARGET_LATENCY = 0.25, CHUNK_SEC = 0.04;
 
     function flush() {
-      if (!pendingFrames) return;
+      if (!pendingFrames || !ctx) { pending = []; pendingFrames = 0; return; }
       const buf = ctx.createBuffer(pendingCh, pendingFrames, pendingRate);
       const outs = [];
       for (let c = 0; c < pendingCh; c++) outs.push(buf.getChannelData(c));
@@ -80,11 +142,11 @@
       if (nextTime < now + 0.02 || nextTime > now + 1.0) nextTime = now + TARGET_LATENCY; // underrun/drift reset
       src.start(nextTime);
       nextTime += buf.duration;
-      meter.style.width = Math.min(100, Math.round(peak * 140)) + '%';
+      if (!muted) peakIn = Math.max(peakIn, peak);
     }
 
     function onFrame(ab) {
-      if (ab.byteLength <= 12) return;
+      if (!(ab instanceof ArrayBuffer) || ab.byteLength <= 12) return;
       const dv = new DataView(ab);
       const rate = dv.getUint32(4, true), ch = dv.getUint8(8) || 1;
       if (rate !== pendingRate || ch !== pendingCh) { flush(); pendingRate = rate; pendingCh = ch; }
@@ -95,36 +157,72 @@
     }
 
     function connect() {
+      clearTimeout(retry);
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(proto + '//' + location.host + '/api/sessions/' + id + '/listen');
       ws.binaryType = 'arraybuffer';
+      ws.onopen = () => { wsOpen = true; render(lastSession); };
       ws.onmessage = (e) => onFrame(e.data);
-      ws.onclose = () => { if (listening) setTimeout(connect, 1500); };
+      ws.onclose = () => { wsOpen = false; if (listening) { connEl.textContent = 'Reconnecting…'; retry = setTimeout(connect, 1500); } };
     }
 
-    listenBtn.onclick = async () => {
-      if (listening) {
-        listening = false; ws && ws.close(); ctx && ctx.close(); ctx = null;
-        listenBtn.textContent = 'Listen'; muteBtn.disabled = true; meter.style.width = '0';
-        return;
-      }
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
-      await ctx.resume();
-      gain = ctx.createGain(); gain.connect(ctx.destination);
-      nextTime = 0; listening = true; connect();
-      listenBtn.textContent = 'Stop'; muteBtn.disabled = false; poll();
-    };
+    async function keepAwake() {
+      try { if ('wakeLock' in navigator && listening && document.visibilityState === 'visible') wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
+    }
 
-    muteBtn.onclick = (e) => {
-      const b = e.currentTarget;
-      const on = b.getAttribute('aria-pressed') === 'true';
-      b.setAttribute('aria-pressed', String(!on));
-      b.textContent = on ? 'Mute' : 'Unmute';
-      if (gain) gain.gain.value = on ? 1 : 0;
-    };
-    document.getElementById('copy').onclick = async () => {
-      await navigator.clipboard.writeText(location.origin + '/m/' + id);
-    };
+    function applyGain() { if (gain) gain.gain.value = muted ? 0 : Number(volEl.value); }
+
+    function start() {
+      // Everything audio-related must happen synchronously inside the tap for iOS Safari.
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (_) {} // play through silent switch (iOS 17+)
+      const AC = window.AudioContext || window.webkitAudioContext;
+      ctx = new AC({ latencyHint: 'playback' });
+      gain = ctx.createGain(); gain.connect(ctx.destination); applyGain();
+      const unlock = ctx.createBufferSource(); unlock.buffer = ctx.createBuffer(1, 1, 22050); unlock.connect(ctx.destination); unlock.start(0);
+      ctx.resume && ctx.resume();
+      nextTime = 0; listening = true; connect();
+      listenBtn.innerHTML = '■&nbsp; Stop';
+      listenBtn.classList.add('on'); listenBtn.setAttribute('aria-pressed', 'true');
+      muteBtn.disabled = false;
+      $('tip').textContent = 'Keep this page open. Audio is ~¼ s behind the DAW.';
+      if ('mediaSession' in navigator) {
+        try { navigator.mediaSession.metadata = new MediaMetadata({ title: title, artist: 'Gigma live' }); } catch (_) {}
+      }
+      keepAwake(); poll();
+    }
+    function stop() {
+      listening = false; wsOpen = false; clearTimeout(retry);
+      ws && ws.close(); ctx && ctx.close(); ctx = null; gain = null;
+      pending = []; pendingFrames = 0; level = 0;
+      listenBtn.innerHTML = '▶&nbsp; Listen';
+      listenBtn.classList.remove('on'); listenBtn.setAttribute('aria-pressed', 'false');
+      muteBtn.disabled = true; setMute(false);
+      $('tip').textContent = 'Tap Listen to start again.';
+      if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+      render(lastSession);
+    }
+    listenBtn.onclick = () => (listening ? stop() : start());
+
+    function setMute(on) {
+      muted = on;
+      muteBtn.setAttribute('aria-pressed', String(on));
+      muteBtn.textContent = on ? 'Unmute' : 'Mute';
+      applyGain();
+    }
+    muteBtn.onclick = () => setMute(!muted);
+    volEl.oninput = applyGain;
+
+    // iOS suspends/interrupts the context on lock, calls, or tab switch — resume when back.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !listening) return;
+      if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+      if (!ws || ws.readyState > 1) connect();
+      keepAwake();
+    });
+    document.addEventListener('touchend', () => { if (listening && ctx && ctx.state !== 'running') ctx.resume().catch(() => {}); }, { passive: true });
+
+    $('share').onclick = () => Gigma.share(meetingUrl, title);
+    $('leave').addEventListener('click', () => { if (listening) stop(); });
   </script>
 </body>
 </html>
