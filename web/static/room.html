@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Gigma</title>
-  <link rel="stylesheet" href="/styles.css?v=2" />
+  <link rel="stylesheet" href="/styles.css?v=3" />
 </head>
 <body>
   <div class="room">
@@ -35,23 +35,29 @@
         <div class="stat"><span>Connection</span><strong id="conn">Not listening</strong></div>
       </div>
 
+      <section class="card people" style="margin:0" aria-label="People">
+        <div class="people-head"><span>In the room</span><span class="mic-level" id="mic-level" aria-hidden="true"><i></i></span></div>
+        <ul id="people"></ul>
+      </section>
+
       <div class="card vol" style="margin:0">
         <span>Volume</span>
         <input id="volume" type="range" min="0" max="1.5" step="0.01" value="1" aria-label="Volume" />
       </div>
 
-      <p class="hint" id="tip">Tap <b>Listen</b> to start. On iPhone, turn the ring/silent switch off if you hear nothing.</p>
+      <p class="hint" id="tip">Tap <b>Listen</b> to start, <b>Unmute</b> to talk. Use headphones so the producer doesn’t hear their own track back.</p>
     </main>
 
     <footer class="controls">
       <div class="inner">
         <button id="listen" class="primary" type="button">▶&nbsp; Listen</button>
-        <button id="mute" type="button" aria-pressed="false" disabled>Mute</button>
+        <button id="mic" type="button" aria-pressed="false" aria-label="Unmute microphone">🎤&nbsp; Unmute</button>
       </div>
     </footer>
   </div>
 
   <script src="/common.js?v=2"></script>
+  <script src="/talk.js?v=1"></script>
   <script>
     const parts = location.pathname.split('/').filter(Boolean);
     const id = parts[1];
@@ -60,7 +66,7 @@
     const $ = (x) => document.getElementById(x);
     $('you').textContent = name;
     const hostTile = $('host-tile'), hostState = $('host-state'), hostPill = $('host-pill');
-    const listenBtn = $('listen'), muteBtn = $('mute'), volEl = $('volume'), connEl = $('conn');
+    const listenBtn = $('listen'), micBtn = $('mic'), volEl = $('volume'), connEl = $('conn');
     let title = 'Session';
 
     // ---- Level meter: 16 bars, smoothed with decay ----
@@ -95,7 +101,22 @@
       else if (!wsOpen) connEl.textContent = 'Connecting…';
       else connEl.textContent = streaming ? 'Good' : 'Connected';
     }
-    let lastSession = null;
+    let lastSession = null, talkers = [], myTalker = 0;
+    const peopleEl = $('people'), micLevelEl = $('mic-level').firstElementChild;
+    function renderPeople() {
+      const host = lastSession && lastSession.hasHost ? [{ name: (lastSession.host && lastSession.host.label) || 'Producer', role: 'Producer', live: lastSession.hostLive }] : [];
+      const rows = host.map((h) => `<li><span class="av">${Gigma.initial(h.name)}</span><span class="nm">${esc(h.name)}</span><span class="tag">${h.live ? 'DAW' : 'offline'}</span></li>`);
+      for (const t of talkers) {
+        const me = t.id === myTalker;
+        const talking = me ? GigmaTalk.isLive() : (GigmaTalk.speaking(t.id) || t.live);
+        rows.push(`<li class="${talking ? 'talking' : ''}"><span class="av">${Gigma.initial(t.name)}</span><span class="nm">${esc(t.name || 'Guest')}${me ? ' (you)' : ''}</span><span class="tag">${talking ? '🎤 on' : 'muted'}</span></li>`);
+      }
+      if (!listening && !talkers.length) rows.push('<li class="empty">Tap Listen to join the audio</li>');
+      peopleEl.innerHTML = rows.join('');
+      micLevelEl.style.transform = 'scaleX(' + Math.min(1, GigmaTalk.micLevel() * 2).toFixed(2) + ')';
+    }
+    function esc(x) { return String(x).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+    setInterval(renderPeople, 250);
     async function poll() {
       try {
         const r = await fetch('/api/sessions/' + id, { cache: 'no-store' });
@@ -109,6 +130,7 @@
         $('host-label').textContent = label;
         $('host-avatar').textContent = Gigma.initial(label);
         $('listeners').textContent = String(s.listeners || 0);
+        talkers = s.talkers || [];
       } catch (_) {}
       render(lastSession);
     }
@@ -118,7 +140,7 @@
     // ---- Relay player: PCM16 frames over WebSocket → Web Audio ----
     // Frame: seq u32 | sampleRate u32 | channels u8 | 3 reserved | int16 LE interleaved
     let ctx, gain, ws, nextTime = 0, pending = [], pendingFrames = 0, pendingRate = 48000, pendingCh = 2;
-    let muted = false, wakeLock = null, retry = null;
+    let wakeLock = null, retry = null;
     const TARGET_LATENCY = 0.25, CHUNK_SEC = 0.04;
 
     function flush() {
@@ -142,13 +164,14 @@
       if (nextTime < now + 0.02 || nextTime > now + 1.0) nextTime = now + TARGET_LATENCY; // underrun/drift reset
       src.start(nextTime);
       nextTime += buf.duration;
-      if (!muted) peakIn = Math.max(peakIn, peak);
+      peakIn = Math.max(peakIn, peak);
     }
 
     function onFrame(ab) {
       if (!(ab instanceof ArrayBuffer) || ab.byteLength <= 12) return;
       const dv = new DataView(ab);
       const rate = dv.getUint32(4, true), ch = dv.getUint8(8) || 1;
+      if (rate === 0) { GigmaTalk.onMicFrame(ab, ctx, gain); return; } // another guest's mic
       if (rate !== pendingRate || ch !== pendingCh) { flush(); pendingRate = rate; pendingCh = ch; }
       const samples = new Int16Array(ab.slice(12));
       pending.push(samples); pendingFrames += samples.length / ch;
@@ -159,10 +182,13 @@
     function connect() {
       clearTimeout(retry);
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(proto + '//' + location.host + '/api/sessions/' + id + '/listen');
+      ws = new WebSocket(proto + '//' + location.host + '/api/sessions/' + id + '/listen?name=' + encodeURIComponent(name));
       ws.binaryType = 'arraybuffer';
       ws.onopen = () => { wsOpen = true; render(lastSession); };
-      ws.onmessage = (e) => onFrame(e.data);
+      ws.onmessage = (e) => {
+        if (typeof e.data === 'string') { try { const m = JSON.parse(e.data); if (m.type === 'hello') myTalker = m.talker; } catch (_) {} return; }
+        onFrame(e.data);
+      };
       ws.onclose = () => { wsOpen = false; if (listening) { connEl.textContent = 'Reconnecting…'; retry = setTimeout(connect, 1500); } };
     }
 
@@ -170,7 +196,7 @@
       try { if ('wakeLock' in navigator && listening && document.visibilityState === 'visible') wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
     }
 
-    function applyGain() { if (gain) gain.gain.value = muted ? 0 : Number(volEl.value); }
+    function applyGain() { if (gain) gain.gain.value = Number(volEl.value); }
 
     function start() {
       // Everything audio-related must happen synchronously inside the tap for iOS Safari.
@@ -183,8 +209,7 @@
       nextTime = 0; listening = true; connect();
       listenBtn.innerHTML = '■&nbsp; Stop';
       listenBtn.classList.add('on'); listenBtn.setAttribute('aria-pressed', 'true');
-      muteBtn.disabled = false;
-      $('tip').textContent = 'Keep this page open. Audio is ~¼ s behind the DAW.';
+      $('tip').textContent = 'Keep this page open. Tap Unmute to talk — headphones avoid echo.';
       if ('mediaSession' in navigator) {
         try { navigator.mediaSession.metadata = new MediaMetadata({ title: title, artist: 'Gigma live' }); } catch (_) {}
       }
@@ -196,20 +221,38 @@
       pending = []; pendingFrames = 0; level = 0;
       listenBtn.innerHTML = '▶&nbsp; Listen';
       listenBtn.classList.remove('on'); listenBtn.setAttribute('aria-pressed', 'false');
-      muteBtn.disabled = true; setMute(false);
+      GigmaTalk.stopAll(); setMicUi(false); myTalker = 0;
       $('tip').textContent = 'Tap Listen to start again.';
       if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
       render(lastSession);
     }
     listenBtn.onclick = () => (listening ? stop() : start());
 
-    function setMute(on) {
-      muted = on;
-      muteBtn.setAttribute('aria-pressed', String(on));
-      muteBtn.textContent = on ? 'Unmute' : 'Mute';
-      applyGain();
+    // ---- Mic (Zoom-style: starts muted; first Unmute asks for permission) ----
+    function setMicUi(on) {
+      micBtn.setAttribute('aria-pressed', String(on));
+      micBtn.classList.toggle('live', on);
+      micBtn.innerHTML = on ? '🎤&nbsp; Mute' : '🎤&nbsp; Unmute';
+      micBtn.setAttribute('aria-label', on ? 'Mute microphone' : 'Unmute microphone');
     }
-    muteBtn.onclick = () => setMute(!muted);
+    function sendMic(b) { if (ws && ws.readyState === 1 && ws.bufferedAmount < 65536) ws.send(b); }
+    let micBusy = false;
+    micBtn.onclick = async () => {
+      if (micBusy) return;
+      if (GigmaTalk.isLive()) { GigmaTalk.muteMic(); setMicUi(false); return; }
+      if (!GigmaTalk.supported()) { Gigma.toast('This browser can’t use the microphone here'); return; }
+      if (!listening) start();
+      micBusy = true;
+      try {
+        await GigmaTalk.enableMic(ctx, sendMic);
+        if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
+        setMicUi(true);
+        Gigma.toast('You’re unmuted');
+      } catch (e) {
+        setMicUi(false);
+        Gigma.toast(e && e.name === 'NotAllowedError' ? 'Mic blocked — allow it in your browser settings' : 'Couldn’t start the mic');
+      } finally { micBusy = false; }
+    };
     volEl.oninput = applyGain;
 
     // iOS suspends/interrupts the context on lock, calls, or tab switch — resume when back.

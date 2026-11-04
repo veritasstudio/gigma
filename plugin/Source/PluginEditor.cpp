@@ -216,9 +216,9 @@ void GigmaAudioProcessorEditor::timerCallback()
         text << "AOO (LAN/VPN direct): " << ep << "\n";
     if (role == GigmaSessionClient::Role::host)
         text << "Plugin peers: " << s.peers << "  ·  Browser listeners: " << s.listeners
-             << (s.relayOn ? "  (relay on)" : "") << "\n";
+             << (s.relayOn ? "  (relay on)" : "") << "  ·  Browser mics live: " << s.guestMics << "\n";
     else if (role == GigmaSessionClient::Role::guest)
-        text << "Host: " << (s.peers > 0 ? "connected" : "waiting") << "\n";
+        text << "Host: " << (s.peers > 0 ? "connected" : "waiting") << "  ·  Browser mics live: " << s.guestMics << "\n";
     if (role != GigmaSessionClient::Role::none && ! s.brokerOk)
         text << "Broker: reconnecting…\n";
     if (role != GigmaSessionClient::Role::none && s.peers > 0)

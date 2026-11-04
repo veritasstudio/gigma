@@ -10,7 +10,7 @@ Zoom-simple low-latency music collaboration: a **meeting-link broker** (Go) plus
 | --- | --- |
 | **Go broker** (`cmd/gigma`) | Meeting links, who joins, peer endpoint exchange, and a small UDP→WebSocket relay for browser listeners. |
 | **macOS plugin** (`plugin/`) | Producer loads VST3/AU in the DAW. Hosts a meeting or joins one; owns **AOO** audio I/O. |
-| **Browser guests** | Open `/m/{id}`, enter name, Join, press **Listen** — no install. |
+| **Browser guests** | Open `/m/{id}`, enter name, Join, press **Listen**, **Unmute** to talk — no install. |
 
 ### Audio paths
 
@@ -30,7 +30,23 @@ Zoom-simple low-latency music collaboration: a **meeting-link broker** (Go) plus
    broker reports ≥1 browser listener the host plugin also sends PCM16 (native rate, stereo) to the
    same UDP port (`GGM1` packets). The broker fans it out on `GET /api/sessions/{id}/listen`
    (WebSocket); `room.html` plays it via Web Audio with ~250 ms buffer. Outbound-only from the
-   producer. Browser mic → producer is not implemented.
+   producer.
+4. **Browser mic → producer + everyone (talk-back).** The same WebSocket is bidirectional. A guest
+   taps **Unmute** (one permission prompt; starts muted, Zoom-style) and `talk.js` sends 20 ms mono
+   frames up: **Opus 48 kHz** via WebCodecs `AudioEncoder` (~48 kbps, in-band FEC), or PCM16 16 kHz
+   where the browser has no Opus encoder. The broker only fans out (`internal/relay/mic.go`):
+   to every other browser on the WebSocket, and as `GGB1` UDP datagrams from the relay port to every
+   plugin registered on the AOO relay (host + plugin guests) — the socket their GGR1 keepalives
+   already hold open, so no new ports. The plugin decodes each talker (Opus PLC on gaps), resamples
+   to the DAW rate, jitter-buffers (Quality buffer, 60–400 ms) and **adds** the voices to the insert
+   output. Voices are never re-sent, so there's no loop; guests should use headphones so their mic
+   doesn't pick up the producer's track. Plugin UI shows "Browser mics live: N".
+
+   ```
+   browser → broker (WS):  codec u8 (1 opus, 2 pcm16@16k) | 3 reserved | seq u32 | payload
+   broker → browsers (WS): seq u32 | 0 u32 (= mic frame) | codec u8 | 0 | talker u16 | payload
+   broker → plugins (UDP): "GGB1" | talker u16 | codec u8 | 0 | seq u32 | payload
+   ```
 
 The HTTP host is behind Cloudflare, which doesn't proxy UDP, so all UDP goes to the VPS IP directly.
 
@@ -71,6 +87,13 @@ go run ./cmd/relaycheck -base https://gigma.veritas.org.in   # browser relay end
 ./scripts/test-aoo-peer.sh                                   # two AOO engines on this Mac, direct (needs third_party/aoo built)
 ./scripts/test-aoo-relay.sh                                  # two AOO engines via a local broker relay, both directions
 BASE=https://gigma.veritas.org.in ./scripts/test-aoo-relay.sh   # same, through the live VPS relay
+```
+
+```bash
+./scripts/test-guest-mic.sh       # browser mic → plugin: engine selftest (Opus + PCM16 @44.1k), then local
+                                  # broker + host engine + 2 headless Chrome guests with fake mics
+BASE=https://gigma.veritas.org.in ./scripts/test-guest-mic.sh   # same, through the live VPS
+NO_OPUS=1 ./scripts/test-guest-mic.sh                            # force the PCM16 browser fallback
 ```
 
 Cross-network (two machines, no DAW): build `plugin/tests/aoo_relay_peer.cpp` on each (same

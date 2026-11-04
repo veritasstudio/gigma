@@ -102,6 +102,14 @@ public:
     /** True if the relay acked a keepalive in the last few seconds. */
     bool peerRelayUp() const;
 
+    /** Browser guests' mics (GGB1 from the broker relay, see internal/relay/mic.go),
+        decoded and mixed on top of the channel output. Thread-safe. */
+    void setGuestMicGain (float g) { guestGain.store (g); }
+    float guestMicGain() const { return guestGain.load(); }
+    /** Browser mics heard in the last second. */
+    int liveGuestMics() const;
+    uint64_t guestMicPackets() const { return gmPackets.load(); }
+
     /** Best-effort LAN IPv4 of the default route ("127.0.0.1" if offline). */
     static std::string detectLanIp();
 
@@ -115,6 +123,9 @@ private:
     std::string relayIdFor (const void* addr, size_t len);
     bool sendViaPeerRelay (const unsigned char* data, size_t size, const void* addr, size_t len);
     bool handlePeerRelayPacket (const unsigned char* data, size_t n, const void* from, size_t fromLen);
+
+    bool handleGuestMicPacket (const unsigned char* data, size_t n, const void* from, size_t fromLen);
+    void mixGuestMics (float* const* outs, int ch, int n);
 
     void applyQualityLocked();   // needs peerMutex
     void sendChunk (int c0, int ch, int offset, int n, const float* const* inputs, float* const* outputs);
@@ -169,6 +180,14 @@ private:
     std::vector<unsigned char> prScratch;
     std::atomic<int64_t> prLastAckMs { 0 };
     int64_t prLastKeepaliveMs = 0;
+
+    // Browser mic voices: network thread decodes into per-voice SPSC rings,
+    // audio thread mixes them (see GigmaAooEngine.cpp).
+    struct GuestVoice;
+    std::vector<std::unique_ptr<GuestVoice>> voices;
+    std::atomic<float> guestGain { 1.0f };
+    std::atomic<int> guestBufMs { 150 };
+    std::atomic<uint64_t> gmPackets { 0 };
 
 #if GIGMA_HAS_AOO
     struct AooState;

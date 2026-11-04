@@ -39,6 +39,9 @@ type Hub struct {
 	subs  map[string]map[chan []byte]struct{}
 	auth  HostAuth
 	peers *peerTable
+
+	micOnce sync.Once
+	micSt   *micState
 }
 
 // New builds a hub. peerAuth may be nil to disable the plugin↔plugin relay.
@@ -71,6 +74,10 @@ func (h *Hub) PeerStats() PeerStats {
 
 // Subscribe registers a listener; call the returned func to unsubscribe.
 func (h *Hub) Subscribe(sessionID string) (<-chan []byte, func()) {
+	return h.subscribe(sessionID)
+}
+
+func (h *Hub) subscribe(sessionID string) (chan []byte, func()) {
 	ch := make(chan []byte, 256)
 	h.mu.Lock()
 	m := h.subs[sessionID]
@@ -121,6 +128,10 @@ func (h *Hub) ListenUDP(addr string) error {
 	}
 	_ = conn.SetReadBuffer(4 << 20)
 	_ = conn.SetWriteBuffer(4 << 20)
+	m := h.mic()
+	m.mu.Lock()
+	m.conn = conn
+	m.mu.Unlock()
 	log.Printf("gigma audio relay listening on udp %s (browser ingest + AOO peer relay)", addr)
 	if h.peers != nil {
 		go func() {

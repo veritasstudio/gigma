@@ -226,8 +226,21 @@ input[type="range"]:focus { box-shadow: none; }
 }
 .controls #listen { min-height: 58px; font-size: 1.1rem; }
 .controls #listen.on { background: #1f2937; border: 1px solid var(--live); color: var(--live); }
-.controls #mute { min-width: 96px; min-height: 58px; }
-.controls #mute[aria-pressed="true"] { background: #ef44441f; color: #fca5a5; border: 1px solid #ef444466; }
+.controls #mic { min-width: 128px; min-height: 58px; background: #ef44441f; color: #fca5a5; border: 1px solid #ef444466; }
+.controls #mic.live { background: #22c55e1f; color: var(--live); border: 1px solid var(--live); }
+
+.people { padding: 12px 16px; }
+.people-head { display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+.mic-level { width: 72px; height: 6px; border-radius: 3px; background: #ffffff14; overflow: hidden; }
+.mic-level i { display: block; height: 100%; background: var(--live); transform-origin: left; transform: scaleX(0); transition: transform 80ms linear; }
+.people ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.people li { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+.people li .av { flex: 0 0 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: #ffffff14; font-weight: 700; font-size: 0.85rem; }
+.people li .nm { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.people li .tag { font-size: 0.8rem; color: var(--muted); }
+.people li.talking .av { box-shadow: 0 0 0 2px var(--live); }
+.people li.talking .tag { color: var(--live); }
+.people li.empty { color: var(--muted); font-size: 0.9rem; }
 
 .toast {
   position: fixed; left: 50%; z-index: 20;

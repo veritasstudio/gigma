@@ -53,12 +53,13 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":        true,
-			"role":      "meeting-link-broker",
-			"audio":     "plugin-owned (AOO p2p) + browser relay",
-			"relay":     relayPublic,
-			"peerRelay": hub.PeerStats(),
-			"public":    publicBase,
+			"ok":           true,
+			"role":         "meeting-link-broker",
+			"audio":        "plugin-owned (AOO p2p) + browser relay",
+			"relay":        relayPublic,
+			"peerRelay":    hub.PeerStats(),
+			"micToPlugins": hub.MicSent(),
+			"public":       publicBase,
 		})
 	})
 
@@ -93,6 +94,7 @@ func main() {
 			"guests":    s.Guests,
 			"hasHost":   hasHost,
 			"listeners": hub.Listeners(id),
+			"talkers":   hub.Talkers(id),
 		}
 		if hasHost {
 			resp["host"] = host.Public()
@@ -180,6 +182,7 @@ func main() {
 			"ok":        true,
 			"peers":     peers,
 			"listeners": hub.Listeners(id),
+			"talkers":   hub.Talkers(id),
 			"relay":     relayPublic,
 		})
 	})
@@ -217,17 +220,37 @@ func main() {
 			return
 		}
 		defer c.CloseNow()
-		frames, unsub := hub.Subscribe(id)
+		c.SetReadLimit(64 << 10)
+		// Bidirectional: host audio (and other guests' mics) down, this guest's
+		// mic frames up (see internal/relay/mic.go).
+		talker, frames, unsub := hub.SubscribeTalker(id, strings.TrimSpace(r.URL.Query().Get("name")))
 		defer unsub()
-		ctx := c.CloseRead(r.Context())
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go func() {
+			defer cancel()
+			hello, _ := json.Marshal(map[string]any{"type": "hello", "talker": talker})
+			if err := c.Write(ctx, websocket.MessageText, hello); err != nil {
+				return
+			}
+			for {
+				typ, b, err := c.Read(ctx)
+				if err != nil {
+					return
+				}
+				if typ == websocket.MessageBinary {
+					hub.Talk(id, talker, b)
+				}
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case f := <-frames:
-				wctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				wctx, wcancel := context.WithTimeout(ctx, 2*time.Second)
 				err := c.Write(wctx, websocket.MessageBinary, f)
-				cancel()
+				wcancel()
 				if err != nil {
 					return
 				}

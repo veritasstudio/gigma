@@ -53,7 +53,7 @@ public:
 
     /** Live status for the editor. */
     struct Status { int peers = 0; int listeners = 0; bool relayOn = false; bool brokerOk = false; bool hostLive = false;
-                    bool peerRelayOn = false; bool peerRelayUp = false;
+                    bool peerRelayOn = false; bool peerRelayUp = false; int guestMics = 0;
                     uint64_t underruns = 0, drops = 0, resends = 0, xruns = 0, sendOverflows = 0; };
     Status status() const;
 

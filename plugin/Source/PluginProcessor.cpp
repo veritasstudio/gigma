@@ -164,6 +164,7 @@ GigmaAudioProcessor::Status GigmaAudioProcessor::status() const
     s.hostLive = statHostLive.load();
     s.peerRelayOn = aooEngine.peerRelayConfigured();
     s.peerRelayUp = aooEngine.peerRelayUp();
+    s.guestMics = aooEngine.liveGuestMics();
     const auto st = aooEngine.stats();
     s.underruns = st.underruns; s.drops = st.drops; s.resends = st.resends;
     s.xruns = st.xruns; s.sendOverflows = st.sendOverflows;

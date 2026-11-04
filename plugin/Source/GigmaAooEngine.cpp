@@ -26,6 +26,7 @@
  #include "aoo_sink.hpp"
  #include "codec/aoo_pcm.h"
  #include "codec/aoo_opus.h"
+ #include "opus.h"
 #endif
 
 namespace {
@@ -169,6 +170,7 @@ void GigmaAooEngine::setQuality (const Quality& nq)
         q = c;
     }
     limiterOn = c.limiter;
+    guestBufMs = c.bufferMs;
     std::lock_guard<std::mutex> lock (peerMutex);
     applyQualityLocked();
 }
@@ -222,7 +224,235 @@ void GigmaAooEngine::applyQualityLocked()
 #endif
 }
 
-GigmaAooEngine::GigmaAooEngine() = default;
+
+// ---- Browser guest mics (talk-back) -------------------------------------------
+//
+// The broker sends each unmuted browser guest's mic as "GGB1" datagrams from the
+// relay port (same socket our GGR1 keepalives keep open):
+//   0 "GGB1" | 4 talker u16 LE | 6 codec u8 | 7 0 | 8 seq u32 LE | 12 payload
+// codec 1 = one Opus packet (48 kHz mono, 20 ms), codec 2 = PCM16 LE 16 kHz mono.
+// The network thread decodes (Opus PLC on gaps), resamples to the DAW rate and
+// writes a per-talker SPSC ring; the audio thread mixes every primed ring on top
+// of the channel output with a small jitter buffer. Never sent onward (no echo).
+namespace {
+constexpr int kMaxGuestVoices = 8;
+constexpr size_t kVoiceRing = 1 << 16;     // mono samples (~1.3 s @ 48k)
+constexpr size_t kGmHdr = 12;
+constexpr int kOpusCodec = 1, kPcmCodec = 2;
+
+uint32_t getU32 (const unsigned char* p)
+{
+    return (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
+}
+} // namespace
+
+struct GigmaAooEngine::GuestVoice
+{
+    // network thread
+    uint16_t talker = 0;
+    int64_t lastMs = 0;
+    uint32_t lastSeq = 0;
+    bool haveSeq = false;
+    double pos = 0.0;      // resampler read position (0 = `prev`)
+    float prev = 0.0f;
+#if GIGMA_HAS_AOO
+    OpusDecoder* dec = nullptr;
+#endif
+    std::vector<float> tmp = std::vector<float> (5760 * 2);
+    std::vector<float> rs = std::vector<float> (5760 * 4);
+
+    // shared (SPSC)
+    std::vector<float> ring = std::vector<float> (kVoiceRing, 0.0f);
+    std::atomic<size_t> w { 0 }, r { 0 };
+    std::atomic<int64_t> liveMs { 0 };
+    std::atomic<bool> flush { false };    // network → audio: drop everything buffered
+
+    // audio thread
+    bool primed = false;
+
+    ~GuestVoice()
+    {
+#if GIGMA_HAS_AOO
+        if (dec) opus_decoder_destroy (dec);
+#endif
+    }
+
+    void reset (uint16_t id)
+    {
+        talker = id;
+        haveSeq = false;
+        pos = 0.0;
+        prev = 0.0f;
+#if GIGMA_HAS_AOO
+        if (dec) opus_decoder_ctl (dec, OPUS_RESET_STATE);
+#endif
+        flush.store (true, std::memory_order_release);
+    }
+
+    void push (const float* in, int n, double inRate, double outRate)
+    {
+        if (n <= 0 || outRate <= 0)
+            return;
+        const double step = inRate / outRate;
+        int k = 0;
+        const int cap = (int) rs.size();
+        while (pos < (double) n && k < cap)
+        {
+            const int i = (int) pos;
+            const float f = (float) (pos - i);
+            const float a = i == 0 ? prev : in[i - 1];
+            const float b = in[i];
+            rs[(size_t) k++] = a + (b - a) * f;
+            pos += step;
+        }
+        pos -= (double) n;
+        prev = in[n - 1];
+        const size_t wr = w.load (std::memory_order_relaxed);
+        const size_t rd = r.load (std::memory_order_acquire);
+        if (kVoiceRing - (wr - rd) < (size_t) k)
+            return;   // audio thread stalled: drop
+        for (int j = 0; j < k; ++j)
+            ring[(wr + (size_t) j) % kVoiceRing] = rs[(size_t) j];
+        w.store (wr + (size_t) k, std::memory_order_release);
+    }
+};
+
+int GigmaAooEngine::liveGuestMics() const
+{
+    const auto t = nowMs();
+    int c = 0;
+    for (auto& v : voices)
+        if (v && t - v->liveMs.load() < 1000)
+            ++c;
+    return c;
+}
+
+bool GigmaAooEngine::handleGuestMicPacket (const unsigned char* data, size_t n, const void* from, size_t fromLen)
+{
+    if (n < 4 || std::memcmp (data, "GGB1", 4) != 0)
+        return false;
+    {
+        std::lock_guard<std::mutex> lock (prMutex);
+        if (! sameAddr (prAddr, from, fromLen))
+            return true;   // only trust the broker relay
+    }
+    if (n <= kGmHdr || voices.empty())
+        return true;
+    const uint16_t talker = (uint16_t) (data[4] | (data[5] << 8));
+    const int codec = data[6];
+    const uint32_t seq = getU32 (data + 8);
+    const unsigned char* payload = data + kGmHdr;
+    const int len = (int) (n - kGmHdr);
+    const int64_t t = nowMs();
+
+    GuestVoice* v = nullptr;
+    for (auto& x : voices)
+        if (x->talker == talker && t - x->lastMs < 10000) { v = x.get(); break; }
+    if (v == nullptr)
+    {
+        GuestVoice* oldest = nullptr;
+        for (auto& x : voices)
+            if (! oldest || x->lastMs < oldest->lastMs) oldest = x.get();
+        v = oldest;
+        v->reset (talker);
+    }
+    v->lastMs = t;
+
+    int lost = 0;
+    if (v->haveSeq)
+    {
+        const int32_t d = (int32_t) (seq - v->lastSeq);
+        if (d <= 0)
+            return true;               // duplicate / reordered-late
+        lost = std::min (d - 1, 5);    // > 100 ms gap: don't invent more than that
+    }
+    v->haveSeq = true;
+    v->lastSeq = seq;
+    gmPackets.fetch_add (1, std::memory_order_relaxed);
+    v->liveMs.store (t);
+
+    if (codec == kOpusCodec)
+    {
+#if GIGMA_HAS_AOO
+        if (v->dec == nullptr)
+        {
+            int err = 0;
+            v->dec = opus_decoder_create (48000, 1, &err);
+            if (err != OPUS_OK) { v->dec = nullptr; return true; }
+        }
+        float* pcm = v->tmp.data();
+        for (int i = 0; i < lost; ++i)
+        {
+            const int k = opus_decode_float (v->dec, nullptr, 0, pcm, 960, 0);   // PLC
+            if (k > 0) v->push (pcm, k, 48000.0, sampleRate);
+        }
+        const int k = opus_decode_float (v->dec, payload, len, pcm, 5760, 0);
+        if (k > 0) v->push (pcm, k, 48000.0, sampleRate);
+#endif
+    }
+    else if (codec == kPcmCodec)
+    {
+        const int k = std::min (len / 2, (int) v->tmp.size());
+        float* pcm = v->tmp.data();
+        for (int i = 0; i < k; ++i)
+            pcm[i] = (float) (int16_t) (payload[2 * i] | (payload[2 * i + 1] << 8)) / 32768.0f;
+        static const float zeros[1024] = {};
+        for (int i = 0; i < lost && k > 0; ++i)   // no PLC for PCM: fill the gap with silence
+            v->push (zeros, std::min (k, 1024), 16000.0, sampleRate);
+        v->push (pcm, k, 16000.0, sampleRate);
+    }
+    return true;
+}
+
+void GigmaAooEngine::mixGuestMics (float* const* outs, int ch, int n)
+{
+    if (voices.empty() || n <= 0)
+        return;
+    const float gain = guestGain.load (std::memory_order_relaxed);
+    const int bufMs = std::clamp (guestBufMs.load (std::memory_order_relaxed), 60, 400);
+    const size_t target = (size_t) (sampleRate * bufMs / 1000.0);
+    const size_t maxBuffered = target + (size_t) (sampleRate * 0.2);
+    for (auto& vp : voices)
+    {
+        auto& v = *vp;
+        if (v.flush.exchange (false, std::memory_order_acq_rel))
+        {
+            v.r.store (v.w.load (std::memory_order_acquire), std::memory_order_release);
+            v.primed = false;
+        }
+        const size_t wr = v.w.load (std::memory_order_acquire);
+        size_t rd = v.r.load (std::memory_order_relaxed);
+        size_t avail = wr - rd;
+        if (! v.primed)
+        {
+            if (avail < target)
+                continue;
+            v.primed = true;
+        }
+        if (avail > maxBuffered)   // clock drift / burst after a stall: catch up
+        {
+            rd = wr - target;
+            avail = target;
+        }
+        const int k = (int) std::min<size_t> (avail, (size_t) n);
+        if (gain > 0.0f)
+            for (int i = 0; i < k; ++i)
+            {
+                const float s = v.ring[(rd + (size_t) i) % kVoiceRing] * gain;
+                for (int c = 0; c < ch; ++c)
+                    if (outs[c]) outs[c][i] += s;
+            }
+        v.r.store (rd + (size_t) k, std::memory_order_release);
+        if (k < n)
+            v.primed = false;   // underrun: re-buffer before playing again
+    }
+}
+
+GigmaAooEngine::GigmaAooEngine()
+{
+    for (int i = 0; i < kMaxGuestVoices; ++i)
+        voices.push_back (std::make_unique<GuestVoice>());
+}
 
 GigmaAooEngine::~GigmaAooEngine()
 {
@@ -681,6 +911,7 @@ void GigmaAooEngine::sendChunk (int, int ch, int off, int n, const float* const*
     if (aoo && aoo->sink)
         aoo->sink->process (planarOut.data(), n, aoo_getCurrentNtpTime(), nullptr, nullptr);
 #endif
+    mixGuestMics (planarOut.data(), ch, n);
 
     // Output = dry input (the producer keeps hearing their track) + remote peers.
     for (int c = 0; c < ch; ++c)
@@ -768,6 +999,8 @@ void GigmaAooEngine::networkThreadMain()
             if (n <= 0)
                 break;
             got = true;
+            if (handleGuestMicPacket ((const unsigned char*) buf.data(), (size_t) n, &from, (size_t) fromLen))
+                continue;
             if (handlePeerRelayPacket ((const unsigned char*) buf.data(), (size_t) n, &from, (size_t) fromLen))
                 continue;
 #if GIGMA_HAS_AOO
