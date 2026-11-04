@@ -1,6 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
 #include "GigmaSessionClient.h"
+#include "GigmaAooEngine.h"
 
 class GigmaAudioProcessor : public juce::AudioProcessor
 {
@@ -10,6 +11,7 @@ public:
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
@@ -30,8 +32,13 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     GigmaSessionClient& session() { return sessionClient; }
+    GigmaAooEngine& aoo() { return aooEngine; }
+    juce::String lastMeetingUrl() const { return meetingUrl; }
+    void setLastMeetingUrl (juce::String u) { meetingUrl = std::move (u); }
 
 private:
     GigmaSessionClient sessionClient;
+    GigmaAooEngine aooEngine;
+    juce::String meetingUrl;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GigmaAudioProcessor)
 };

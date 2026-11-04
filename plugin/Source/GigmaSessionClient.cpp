@@ -14,7 +14,6 @@ juce::String GigmaSessionClient::postJson (const juce::String& path, const juce:
                     .withHttpRequestCmd ("POST")
                     .withDataToSubmit (jsonBody, "application/json");
 
-    // JUCE version differences: keep scaffold compiling against JUCE 7/8 with curl enabled.
     if (auto stream = url.createInputStream (opts))
     {
         statusCode = stream->getStatusCode();
@@ -24,7 +23,8 @@ juce::String GigmaSessionClient::postJson (const juce::String& path, const juce:
     return {};
 }
 
-GigmaSessionResult GigmaSessionClient::createAndClaimHost (const juce::String& title)
+GigmaSessionResult GigmaSessionClient::createAndClaimHost (const juce::String& title,
+                                                           const juce::String& aooEndpoint)
 {
     GigmaSessionResult out;
     int status = 0;
@@ -45,8 +45,12 @@ GigmaSessionResult GigmaSessionClient::createAndClaimHost (const juce::String& t
         return out;
     }
 
-    auto claimed = postJson ("/api/sessions/" + sessionId + "/host",
-                             "{\"label\":\"Gigma Plugin\"}", status);
+    juce::String body = "{\"label\":\"Gigma Plugin\"";
+    if (aooEndpoint.isNotEmpty())
+        body += ",\"aooEndpoint\":\"" + aooEndpoint.replace ("\"", "\\\"") + "\"";
+    body += "}";
+
+    auto claimed = postJson ("/api/sessions/" + sessionId + "/host", body, status);
     if (status < 200 || status >= 300)
     {
         out.error = "claim host HTTP " + juce::String (status);
@@ -64,12 +68,15 @@ GigmaSessionResult GigmaSessionClient::createAndClaimHost (const juce::String& t
     return out;
 }
 
-bool GigmaSessionClient::heartbeat()
+bool GigmaSessionClient::heartbeat (const juce::String& aooEndpoint)
 {
     if (sessionId.isEmpty() || hostId.isEmpty())
         return false;
     int status = 0;
-    postJson ("/api/sessions/" + sessionId + "/host/heartbeat",
-              "{\"hostId\":\"" + hostId + "\"}", status);
+    juce::String body = "{\"hostId\":\"" + hostId + "\"";
+    if (aooEndpoint.isNotEmpty())
+        body += ",\"aooEndpoint\":\"" + aooEndpoint.replace ("\"", "\\\"") + "\"";
+    body += "}";
+    postJson ("/api/sessions/" + sessionId + "/host/heartbeat", body, status);
     return status >= 200 && status < 300;
 }

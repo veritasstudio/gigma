@@ -1,49 +1,44 @@
 # Gigma
 
-Zoom-simple low-latency music collaboration: a **meeting-link broker** plus a **macOS DAW FX plugin**.
+Zoom-simple low-latency music collaboration: a **meeting-link broker** (Go) plus a **macOS DAW FX plugin** (JUCE + AOO).
 
-**Product** · [`veritasstudio/gigma`](https://github.com/veritasstudio/gigma) · https://gigma.veritas.org.in
+**Repo** · [`veritasstudio/gigma`](https://github.com/veritasstudio/gigma) · https://gigma.veritas.org.in
 
-## Architecture (current direction)
+## Architecture
 
-| Piece | Location | Role |
-| --- | --- | --- |
-| **Go web app** | `cmd/gigma`, `web/static`, `internal/*` | Brokers meeting links and who joins. **Not** the audio path. Open sessions (no login); join page = name + Join. |
-| **macOS plugin** | `plugin/` | Producer loads **Gigma** (VST3 / AU) in the DAW. Creates/claims a session via the Go API, shows a shareable link, and is the **audio endpoint** on the producer machine (full DAW I/O). Guests open the link in a browser — no separate SonoBus install for them. |
+| Piece | Role |
+| --- | --- |
+| **Go broker** (`cmd/gigma`) | Meeting links + who joins. Not the audio path. |
+| **macOS plugin** (`plugin/`) | Producer loads VST3/AU in the DAW. Creates link via broker, owns **AOO** audio I/O. |
+| **Browser guests** | Open `/m/{id}`, enter name, Join — no SonoBus install. |
 
-Audio path: **plugin ↔ guests** (direct or relay later). Go only does link/session coordination. DNS already live: Cloudflare proxied `gigma.veritas.org.in` → `15.235.199.44`.
+DNS: Cloudflare proxied `gigma.veritas.org.in` → `15.235.199.44`.
 
-## Repo layout
-
-```
-cmd/gigma/           Go broker entrypoint
-internal/session/    In-memory sessions
-internal/pluginreg/  Producer plugin host claims / heartbeats
-web/static/          Minimal meeting UI (name + Join)
-plugin/              macOS VST3 + AU FX scaffold (JUCE)
-  CMakeLists.txt
-  Source/PluginProcessor.*
-  Source/PluginEditor.*
-  Source/GigmaSessionClient.*
-```
-
-## Go broker
+## Quick test (broker)
 
 ```bash
-go build -o bin/gigma ./cmd/gigma
-GIGMA_PUBLIC_BASE=https://gigma.veritas.org.in ./bin/gigma
+./scripts/test-join-flow.sh
 ```
 
-Useful APIs: `POST /api/sessions`, `POST /api/sessions/{id}/host`, `GET /m/{id}`.
+Creates a session, claims host with an `aooEndpoint`, joins a guest named Alex, asserts the guest sees the host endpoint.
 
-## macOS plugin
+## Build broker for Debian VPS
 
-See [`plugin/README.md`](plugin/README.md). Scaffold compiles against a local JUCE tree; network audio (SonoBus-class) is the next implementation step.
+```bash
+./scripts/build-server.sh
+# → bin/gigma-linux-amd64  (CGO_ENABLED=0, linux/amd64)
+```
 
-## Relationship to SonoBus
+Run on the server (behind Caddy):
 
-SonoBus (Sonosaurus, GPL-3.0, C++/JUCE) remains the reference for peer audio. Gigma’s plugin is a separate GPL-compatible product that may reuse similar techniques; guests should not need a standalone SonoBus install.
+```bash
+GIGMA_PUBLIC_BASE=https://gigma.veritas.org.in GIGMA_ADDR=127.0.0.1:3080 ./gigma-linux-amd64
+```
+
+## Plugin (Mac only)
+
+See [`plugin/README.md`](plugin/README.md). `GigmaAooEngine` captures DAW input → AOO UDP → remote; received audio → DAW out. Enable `-DGIGMA_HAS_AOO=ON` with upstream AOO.
 
 ## License
 
-Treat contributions as GPL-3.0-or-later until a license file is added.
+GPL-3.0-or-later intent (compatible with SonoBus / AOO).

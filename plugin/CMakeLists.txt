@@ -4,7 +4,8 @@ project(GigmaPlugin VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Point at a local JUCE tree, e.g. -DJUCE_PATH=/Users/you/JUCE
+option(GIGMA_HAS_AOO "Link against AOO + Opus for network audio" OFF)
+
 if(NOT DEFINED JUCE_PATH)
   message(FATAL_ERROR "Set -DJUCE_PATH=/path/to/JUCE")
 endif()
@@ -31,6 +32,7 @@ target_sources(GigmaPlugin
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/GigmaSessionClient.cpp
+    Source/GigmaAooEngine.cpp
 )
 
 target_compile_definitions(GigmaPlugin
@@ -39,7 +41,16 @@ target_compile_definitions(GigmaPlugin
     JUCE_USE_CURL=1
     JUCE_VST3_CAN_REPLACE_VST2=0
     GIGMA_DEFAULT_BROKER_URL="https://gigma.veritas.org.in"
+    $<IF:$<BOOL:${GIGMA_HAS_AOO}>,GIGMA_HAS_AOO=1,GIGMA_HAS_AOO=0>
 )
+
+if(GIGMA_HAS_AOO)
+  if(NOT DEFINED AOO_PATH)
+    message(FATAL_ERROR "Set -DAOO_PATH=/path/to/aoo (upstream https://git.iem.at/aoo/aoo)")
+  endif()
+  target_include_directories(GigmaPlugin PRIVATE ${AOO_PATH}/include ${AOO_PATH}/lib)
+  target_link_libraries(GigmaPlugin PRIVATE aoo opus)
+endif()
 
 target_link_libraries(GigmaPlugin
   PRIVATE

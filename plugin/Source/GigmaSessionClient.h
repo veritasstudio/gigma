@@ -10,14 +10,14 @@ struct GigmaSessionResult
     juce::String error;
 };
 
-// Talks to the Go broker for meeting links / host claim only (not audio).
 class GigmaSessionClient
 {
 public:
     explicit GigmaSessionClient (juce::String brokerUrl = GIGMA_DEFAULT_BROKER_URL);
 
-    GigmaSessionResult createAndClaimHost (const juce::String& title);
-    bool heartbeat();
+    GigmaSessionResult createAndClaimHost (const juce::String& title,
+                                           const juce::String& aooEndpoint = {});
+    bool heartbeat (const juce::String& aooEndpoint = {});
 
     juce::String currentSessionId() const { return sessionId; }
     juce::String currentMeetingUrl() const { return meetingUrl; }

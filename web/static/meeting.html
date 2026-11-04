@@ -15,7 +15,6 @@
         <p class="muted">Open link · enter your name · go. No login.</p>
       </div>
     </header>
-
     <section class="card">
       <label for="name">Your name</label>
       <input id="name" type="text" placeholder="Your name" autocomplete="nickname" autofocus />
@@ -23,7 +22,6 @@
       <p id="err" class="error" hidden></p>
     </section>
   </main>
-
   <script>
     const id = location.pathname.split('/').filter(Boolean).pop();
     const nameEl = document.getElementById('name');
@@ -41,9 +39,25 @@
         nameEl.focus();
         return;
       }
-      sessionStorage.setItem('gigma:name', name);
-      // Room UI placeholder until live audio wiring lands
-      location.href = '/m/' + id + '/room?name=' + encodeURIComponent(name);
+      join.disabled = true;
+      try {
+        const res = await fetch('/api/sessions/' + id + '/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Could not join');
+        sessionStorage.setItem('gigma:name', name);
+        sessionStorage.setItem('gigma:guestId', data.guest && data.guest.id || '');
+        if (data.aooEndpoint) sessionStorage.setItem('gigma:aoo', data.aooEndpoint);
+        location.href = '/m/' + id + '/room?name=' + encodeURIComponent(name);
+      } catch (e) {
+        err.textContent = e.message || String(e);
+        err.hidden = false;
+      } finally {
+        join.disabled = false;
+      }
     }
     join.onclick = go;
     nameEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });

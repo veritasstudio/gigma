@@ -3,13 +3,16 @@
 GigmaAudioProcessorEditor::GigmaAudioProcessorEditor (GigmaAudioProcessor& p)
     : AudioProcessorEditor (&p), processor (p)
 {
-    setSize (420, 200);
+    setSize (420, 220);
     addAndMakeVisible (newMeeting);
     addAndMakeVisible (linkBox);
     addAndMakeVisible (status);
     linkBox.setReadOnly (true);
     linkBox.setTextToShowWhenEmpty ("Meeting link appears here", juce::Colours::grey);
-    status.setText ("Broker: session links only — audio stays in this plugin", juce::dontSendNotification);
+    status.setText ("Audio: AOO endpoint on this machine · broker for links only",
+                    juce::dontSendNotification);
+    if (processor.lastMeetingUrl().isNotEmpty())
+        linkBox.setText (processor.lastMeetingUrl(), juce::dontSendNotification);
     newMeeting.onClick = [this] { createMeeting(); };
 }
 
@@ -30,18 +33,20 @@ void GigmaAudioProcessorEditor::resized()
     r.removeFromTop (8);
     linkBox.setBounds (r.removeFromTop (32));
     r.removeFromTop (8);
-    status.setBounds (r.removeFromTop (24));
+    status.setBounds (r.removeFromTop (40));
 }
 
 void GigmaAudioProcessorEditor::createMeeting()
 {
     status.setText ("Creating meeting…", juce::dontSendNotification);
-    // Network call should move off the message thread; scaffold keeps it simple.
-    auto result = processor.session().createAndClaimHost ("DAW session");
+    auto ep = processor.aoo().endpoint();
+    auto result = processor.session().createAndClaimHost ("DAW session", ep);
     if (result.ok)
     {
+        processor.setLastMeetingUrl (result.meetingUrl);
         linkBox.setText (result.meetingUrl, juce::dontSendNotification);
-        status.setText ("Share the link — guests join in the browser", juce::dontSendNotification);
+        status.setText ("Share the link — guests join in the browser\nAOO: " + ep,
+                        juce::dontSendNotification);
     }
     else
     {

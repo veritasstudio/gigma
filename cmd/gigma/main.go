@@ -27,14 +27,13 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":      true,
-			"role":    "meeting-link-broker",
-			"audio":   "plugin-owned",
-			"public":  publicBase,
+			"ok":     true,
+			"role":   "meeting-link-broker",
+			"audio":  "plugin-owned",
+			"public": publicBase,
 		})
 	})
 
-	// Host (producer plugin or web) creates a shareable meeting link.
 	mux.HandleFunc("POST /api/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Title string `json:"title"`
@@ -58,12 +57,13 @@ func main() {
 		}
 		host, hasHost := plugins.Get(id)
 		resp := map[string]any{
-			"id":       s.ID,
-			"title":    s.Title,
-			"path":     "/m/" + s.ID,
-			"url":      publicBase + "/m/" + s.ID,
-			"open":     true,
-			"hasHost":  hasHost,
+			"id":      s.ID,
+			"title":   s.Title,
+			"path":    "/m/" + s.ID,
+			"url":     publicBase + "/m/" + s.ID,
+			"open":    true,
+			"guests":  s.Guests,
+			"hasHost": hasHost,
 		}
 		if hasHost {
 			resp["host"] = host
@@ -71,7 +71,30 @@ func main() {
 		writeJSON(w, http.StatusOK, resp)
 	})
 
-	// Producer DAW plugin claims a session as the audio endpoint.
+	mux.HandleFunc("POST /api/sessions/{id}/join", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var body struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		g, s, ok := store.Join(id, body.Name)
+		if !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		host, hasHost := plugins.Get(id)
+		resp := map[string]any{
+			"guest":   g,
+			"session": map[string]any{"id": s.ID, "title": s.Title, "guests": s.Guests},
+			"hasHost": hasHost,
+		}
+		if hasHost {
+			resp["host"] = host
+			resp["aooEndpoint"] = host.AOOEndpoint
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+
 	mux.HandleFunc("POST /api/sessions/{id}/host", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if _, ok := store.Get(id); !ok {
@@ -79,13 +102,14 @@ func main() {
 			return
 		}
 		var body struct {
-			Label string `json:"label"`
+			Label       string `json:"label"`
+			AOOEndpoint string `json:"aooEndpoint"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body.Label == "" {
 			body.Label = "Gigma Plugin"
 		}
-		h := plugins.Claim(id, body.Label)
+		h := plugins.Claim(id, body.Label, body.AOOEndpoint)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"host": h,
 			"url":  publicBase + "/m/" + id,
@@ -95,17 +119,17 @@ func main() {
 	mux.HandleFunc("POST /api/sessions/{id}/host/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var body struct {
-			HostID string `json:"hostId"`
+			HostID      string `json:"hostId"`
+			AOOEndpoint string `json:"aooEndpoint"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if !plugins.Heartbeat(id, body.HostID) {
+		if !plugins.Heartbeat(id, body.HostID, body.AOOEndpoint) {
 			http.Error(w, "unknown host", http.StatusConflict)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 
-	// Open sessions: join page is name + Join only (no login/password).
 	mux.HandleFunc("GET /m/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if _, ok := store.Get(id); !ok {
@@ -126,7 +150,7 @@ func main() {
 
 	mux.Handle("GET /", http.FileServer(http.Dir(webDir)))
 
-	srv := &http.Server{Addr: addr, Handler: logging(mux)}
+	srv := &http.Server{Addr: addr, Handler: withCORS(logging(mux))}
 	go func() {
 		log.Printf("gigma broker listening on %s (public base %s)", addr, publicBase)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -160,5 +184,18 @@ func logging(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
