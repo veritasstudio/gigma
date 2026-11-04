@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 
 #if defined(_WIN32)
@@ -75,6 +76,18 @@ void putFixed16 (unsigned char* p, const std::string& s)
 } // namespace
 
 #if GIGMA_HAS_AOO
+namespace {
+/** aoo_initialize() only runs once per process, but aoo_terminate() wipes the
+    codec registry. Calling terminate on every DAW re-prepare (or when one of
+    several instances goes away) silently left every later source/sink with no
+    Opus/PCM codec. Initialise once, never terminate from a plugin instance. */
+void ensureAooInitialised()
+{
+    static std::once_flag once;
+    std::call_once (once, [] { aoo_initialize (nullptr); });
+}
+} // namespace
+
 struct GigmaAooEngine::AooState
 {
     AooSource::Ptr source;
@@ -142,12 +155,16 @@ bool GigmaAooEngine::prepare (double sr, int maxBlockSize, int numChannels)
 
 #if GIGMA_HAS_AOO
     std::lock_guard<std::mutex> lock (peerMutex);
-    aoo_initialize (nullptr);
+    ensureAooInitialised();
     aoo = std::make_unique<AooState>();
     aoo->source = AooSource::create (kAooId);
     aoo->sink = AooSink::create (kAooId);
     if (! aoo->source || ! aoo->sink)
+    {
+        aoo.reset();
+        ready = true;   // still pass dry audio through
         return false;
+    }
     aoo->source->setup (channels, sampleRate, maxBlock, 0);
     aoo->sink->setup (channels, sampleRate, maxBlock, 0);
     aoo->sink->setLatency (0.05);
@@ -158,11 +175,13 @@ bool GigmaAooEngine::prepare (double sr, int maxBlockSize, int numChannels)
     aoo->source->setFormat (fmt.header);
     aoo->source->startStream (0, nullptr);
 #endif
+    ready = true;
     return true;
 }
 
 void GigmaAooEngine::release()
 {
+    ready = false;
     stopNetwork();
     {
         std::lock_guard<std::mutex> lock (peerMutex);
@@ -172,7 +191,6 @@ void GigmaAooEngine::release()
             aoo->source.reset();
             aoo->sink.reset();
             aoo.reset();
-            aoo_terminate();
         }
 #endif
         // Sinks are gone with the source; next syncPeers() re-adds them.
@@ -314,10 +332,32 @@ void GigmaAooEngine::setRelay (const std::string& relayHostPort, const std::stri
 void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
                               int numChannels, int numSamples)
 {
-    const int ch = std::min (numChannels, channels);
-    const int n = std::min (numSamples, maxBlock);
-    if (ch <= 0 || n <= 0 || channelScratchIn.empty())
+    // Invariant: Gigma is an insert FX, so the channel's own audio must ALWAYS
+    // reach the output. Remote peers are only ever *added* on top. Anything we
+    // can't handle (not prepared, oversized block, extra channels) is passed
+    // through untouched rather than zeroed.
+    auto passThrough = [&] (int c, int from, int to)
+    {
+        if (! (outputs && outputs[c]) || to <= from)
+            return;
+        if (inputs && inputs[c])
+        {
+            if (inputs[c] != outputs[c])
+                std::memmove (outputs[c] + from, inputs[c] + from, (size_t) (to - from) * sizeof (float));
+        }
+        else
+            std::memset (outputs[c] + from, 0, (size_t) (to - from) * sizeof (float));
+    };
+
+    const bool isReady = ready.load (std::memory_order_acquire) && ! channelScratchIn.empty();
+    const int ch = isReady ? std::min (numChannels, channels) : 0;
+    const int n = isReady ? std::min (numSamples, maxBlock) : 0;
+    if (ch <= 0 || n <= 0)
+    {
+        for (int c = 0; c < numChannels; ++c)
+            passThrough (c, 0, numSamples);
         return;
+    }
 
     for (int c = 0; c < ch; ++c)
     {
@@ -364,11 +404,14 @@ void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
         const float* dry = channelScratchIn[(size_t) c].data();
         const float* wet = channelScratchOut[(size_t) c].data();
         for (int i = 0; i < n; ++i)
-            outputs[c][i] = dry[i] + wet[i];
+        {
+            const float w = wet[i];
+            outputs[c][i] = dry[i] + (std::isfinite (w) ? w : 0.0f);
+        }
+        passThrough (c, n, numSamples);   // block larger than prepared: keep dry
     }
     for (int c = ch; c < numChannels; ++c)
-        if (outputs && outputs[c])
-            std::memset (outputs[c], 0, (size_t) numSamples * sizeof (float));
+        passThrough (c, 0, numSamples);
 }
 
 void GigmaAooEngine::drainRelay()

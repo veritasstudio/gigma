@@ -131,7 +131,8 @@ void GigmaAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     juce::ScopedNoDenormals noDenormals;
     auto* in = buffer.getArrayOfReadPointers();
     auto* out = buffer.getArrayOfWritePointers();
-    // Capture DAW input → AOO send; AOO receive → DAW output (SonoBus-style).
+    // Insert FX: capture DAW input → AOO send; output = dry input + remote peers.
+    // The engine never mutes the channel (passes dry through when not ready).
     aooEngine.process (reinterpret_cast<const float* const*> (in),
                        reinterpret_cast<float* const*> (out),
                        buffer.getNumChannels(),

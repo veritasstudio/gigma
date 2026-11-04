@@ -65,6 +65,7 @@ private:
     int maxBlock = 512;
     int channels = 2;
 
+    std::atomic<bool> ready { false };      // prepare() done; process() passes dry through otherwise
     std::atomic<bool> networkRunning { false };
     std::thread netThread;
     int udpSock = -1;
