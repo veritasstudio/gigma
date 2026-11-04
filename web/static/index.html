@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gigma</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="brand">
+      <div class="logo">G</div>
+      <div>
+        <h1>Gigma</h1>
+        <p>Low-latency music sessions. Zoom-simple.</p>
+      </div>
+    </header>
+
+    <section class="card">
+      <h2>Start a session</h2>
+      <p class="muted">Create a room and share one meeting link. Guests join by opening it — no group name or password.</p>
+      <label for="title">Session name</label>
+      <input id="title" type="text" placeholder="Friday jam" autocomplete="off" />
+      <button id="create" class="primary">New meeting</button>
+      <p id="err" class="error" hidden></p>
+    </section>
+
+    <section class="card" id="share" hidden>
+      <h2>Share this link</h2>
+      <div class="row">
+        <input id="link" type="text" readonly />
+        <button id="copy" type="button">Copy</button>
+      </div>
+      <a id="open" class="primary linkish" href="#">Join as host</a>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

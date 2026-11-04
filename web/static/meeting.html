@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gigma meeting</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="meeting">
+  <header class="topbar">
+    <a class="brand-mini" href="/">Gigma</a>
+    <span id="meeting-title">Meeting</span>
+    <span id="meeting-id" class="muted"></span>
+  </header>
+
+  <main class="stage">
+    <div class="tile self">You</div>
+    <div class="tile guest muted-tile">Waiting for others…</div>
+  </main>
+
+  <footer class="controls">
+    <button id="mute" type="button" aria-pressed="false">Mute</button>
+    <button id="copy" type="button">Copy link</button>
+    <a class="danger" href="/">Leave</a>
+  </footer>
+
+  <script>
+    const id = location.pathname.split('/').pop();
+    document.getElementById('meeting-id').textContent = id;
+    fetch('/api/sessions/' + id).then(r => r.json()).then(s => {
+      document.getElementById('meeting-title').textContent = s.title || 'Meeting';
+    }).catch(() => {});
+    document.getElementById('mute').onclick = (e) => {
+      const b = e.currentTarget;
+      const on = b.getAttribute('aria-pressed') === 'true';
+      b.setAttribute('aria-pressed', String(!on));
+      b.textContent = on ? 'Mute' : 'Unmute';
+    };
+    document.getElementById('copy').onclick = async () => {
+      await navigator.clipboard.writeText(location.href);
+    };
+  </script>
+</body>
+</html>

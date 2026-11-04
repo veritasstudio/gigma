@@ -70,3 +70,11 @@ local.json
 *.key
 credentials*
 secrets*
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+coverage.out
+vendor/
