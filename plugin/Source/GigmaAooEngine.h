@@ -32,6 +32,39 @@
 class GigmaAooEngine
 {
 public:
+    /** Audio quality knobs (see plugin UI). Receive buffer applies to what *this*
+        plugin hears; bitrate / frame / redundancy / limiter apply to what it sends. */
+    struct Quality
+    {
+        int bufferMs = 150;       // AOO sink jitter buffer (latency) for incoming audio
+        int bitrateKbps = 160;    // Opus target bitrate for outgoing audio
+        int frameMs = 20;         // Opus frame: 10 (lower latency) or 20 (more robust)
+        int redundancy = 1;       // send each packet N times (1..3), helps lossy links
+        bool limiter = true;      // soft-clip the *send* copy only (dry track untouched)
+
+        bool operator== (const Quality& o) const
+        {
+            return bufferMs == o.bufferMs && bitrateKbps == o.bitrateKbps && frameMs == o.frameMs
+                && redundancy == o.redundancy && limiter == o.limiter;
+        }
+        bool operator!= (const Quality& o) const { return ! (*this == o); }
+    };
+
+    /** Cumulative network/audio health counters (since prepare). */
+    struct Stats
+    {
+        uint64_t underruns = 0;   // sink jitter buffer ran dry → audible gap
+        uint64_t drops = 0;       // blocks lost / skipped (late or never arrived)
+        uint64_t resends = 0;     // blocks recovered by resend
+        uint64_t xruns = 0;       // empty blocks because the *sender* overflowed
+        uint64_t sendOverflows = 0; // our own send buffer overflowed (DAW burst)
+    };
+
+    /** Thread-safe; applies live (frame change restarts the outgoing stream). */
+    void setQuality (const Quality& q);
+    Quality quality() const;
+    Stats stats() const;
+
     GigmaAooEngine();
     ~GigmaAooEngine();
 
@@ -83,6 +116,15 @@ private:
     bool sendViaPeerRelay (const unsigned char* data, size_t size, const void* addr, size_t len);
     bool handlePeerRelayPacket (const unsigned char* data, size_t n, const void* from, size_t fromLen);
 
+    void applyQualityLocked();   // needs peerMutex
+    void sendChunk (int c0, int ch, int offset, int n, const float* const* inputs, float* const* outputs);
+
+    mutable std::mutex qualityMutex;
+    Quality q;
+    int appliedFrameMs = 0;
+    std::atomic<bool> limiterOn { true };
+    std::atomic<uint64_t> stUnderruns { 0 }, stDrops { 0 }, stResends { 0 }, stXruns { 0 }, stSendOverflows { 0 };
+
     double sampleRate = 48000.0;
     int maxBlock = 512;
     int channels = 2;
@@ -96,6 +138,8 @@ private:
 
     std::vector<std::vector<float>> channelScratchIn;
     std::vector<std::vector<float>> channelScratchOut;
+    std::vector<std::vector<float>> channelScratchSend;   // limited copy fed to the network
+    std::vector<const float*> planarSend;
     std::vector<const float*> planarIn;
     std::vector<float*> planarOut;
 
@@ -129,6 +173,7 @@ private:
 #if GIGMA_HAS_AOO
     struct AooState;
     std::unique_ptr<AooState> aoo;
+    static void handleAooEvent (void* user, const union AooEvent* event, int32_t level);
     static int32_t udpSend (void* user, const unsigned char* data, int32_t size,
                             const void* address, uint32_t addrlen, uint32_t flags);
 #endif

@@ -22,9 +22,24 @@ private:
     juce::Label status;
     juce::String headline;
 
+    // Audio quality
+    juce::Label qualityLabel { {}, "Quality" }, bufferLabel { {}, "Buffer" },
+                bitrateLabel { {}, "Bitrate" }, frameLabel { {}, "Frame" };
+    juce::ComboBox presetBox, bufferBox, bitrateBox, frameBox;
+    juce::ToggleButton limiterToggle { "Safety limiter" };
+    juce::ToggleButton redundancyToggle { "Send twice (lossy Wi-Fi)" };
+    bool updatingQualityUi = false;
+
+    // Health readout: deltas over a sliding window
+    GigmaAudioProcessor::Status lastStatus;
+    struct Sample { uint64_t gaps = 0, resent = 0; };
+    std::vector<Sample> window;   // one per timer tick (1 s)
+
     void createMeeting();
     void joinMeeting();
     void timerCallback() override;
+    void refreshQualityUi();
+    void qualityChangedFromUi();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GigmaAudioProcessorEditor)
 };

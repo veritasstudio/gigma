@@ -128,6 +128,100 @@ AooInt32 AOO_CALL GigmaAooEngine::udpSend (void* user, const AooByte* data, AooI
 }
 #endif
 
+#if GIGMA_HAS_AOO
+void AOO_CALL GigmaAooEngine::handleAooEvent (void* user, const AooEvent* e, AooThreadLevel)
+{
+    auto* self = static_cast<GigmaAooEngine*> (user);
+    switch (e->type)
+    {
+        case kAooEventBufferUnderrun: self->stUnderruns.fetch_add (1, std::memory_order_relaxed); break;
+        case kAooEventBlockDrop:      self->stDrops.fetch_add ((uint64_t) std::max (1, (int) e->blockDrop.count), std::memory_order_relaxed); break;
+        case kAooEventBlockResend:    self->stResends.fetch_add ((uint64_t) std::max (1, (int) e->blockResend.count), std::memory_order_relaxed); break;
+        case kAooEventBlockXRun:      self->stXruns.fetch_add ((uint64_t) std::max (1, (int) e->blockXRun.count), std::memory_order_relaxed); break;
+        default: break;
+    }
+}
+#endif
+
+namespace {
+/** Soft clip above -1 dBFS so hot VST peaks never hard-clip in the codec / PCM16
+    browser path (hard clipping is heard as crackle). Unity below the knee. */
+inline float softLimit (float x)
+{
+    constexpr float t = 0.891f;              // -1 dBFS knee
+    const float a = std::fabs (x);
+    if (a <= t || ! std::isfinite (x))
+        return std::isfinite (x) ? x : 0.0f;
+    const float y = t + (1.0f - t) * std::tanh ((a - t) / (1.0f - t));
+    return x < 0 ? -y : y;
+}
+} // namespace
+
+void GigmaAooEngine::setQuality (const Quality& nq)
+{
+    Quality c = nq;
+    c.bufferMs = std::clamp (c.bufferMs, 10, 1000);
+    c.bitrateKbps = std::clamp (c.bitrateKbps, 32, 320);
+    c.frameMs = c.frameMs <= 10 ? 10 : 20;
+    c.redundancy = std::clamp (c.redundancy, 1, 3);
+    {
+        std::lock_guard<std::mutex> lock (qualityMutex);
+        q = c;
+    }
+    limiterOn = c.limiter;
+    std::lock_guard<std::mutex> lock (peerMutex);
+    applyQualityLocked();
+}
+
+GigmaAooEngine::Quality GigmaAooEngine::quality() const
+{
+    std::lock_guard<std::mutex> lock (qualityMutex);
+    return q;
+}
+
+GigmaAooEngine::Stats GigmaAooEngine::stats() const
+{
+    Stats s;
+    s.underruns = stUnderruns.load();
+    s.drops = stDrops.load();
+    s.resends = stResends.load();
+    s.xruns = stXruns.load();
+    s.sendOverflows = stSendOverflows.load();
+    return s;
+}
+
+void GigmaAooEngine::applyQualityLocked()
+{
+#if GIGMA_HAS_AOO
+    if (! aoo || ! aoo->source || ! aoo->sink)
+        return;
+    const auto cq = quality();
+    const double lat = cq.bufferMs / 1000.0;
+    // Jitter buffer: target latency + headroom so a late burst over the relay
+    // still lands instead of being dropped (dropouts on sustained synths = crackle).
+    aoo->sink->setLatency (lat);
+    aoo->sink->setBufferSize (std::max (0.2, lat * 2.0 + 0.1));
+    // Resend lost packets only when the buffer leaves time for a round trip.
+    aoo->sink->setResendData (lat >= 0.08 ? kAooTrue : kAooFalse);
+    aoo->source->setRedundancy (cq.redundancy);
+
+    if (appliedFrameMs != cq.frameMs)
+    {
+        AooFormatOpus fmt {};
+        const int frame = (int) std::lrint (48000.0 * cq.frameMs / 1000.0);   // Opus runs at 48 kHz
+        AooFormatOpus_init (&fmt, channels, 48000, frame, OPUS_APPLICATION_AUDIO);
+        aoo->source->setFormat (fmt.header);   // recreates the encoder
+        appliedFrameMs = cq.frameMs;
+    }
+    opus_int32 br = (opus_int32) cq.bitrateKbps * 1000;
+    aoo->source->codecControl (kAooCodecOpus, OPUS_SET_BITRATE_REQUEST, 0, &br, sizeof (br));
+    opus_int32 sig = OPUS_SIGNAL_MUSIC;
+    aoo->source->codecControl (kAooCodecOpus, OPUS_SET_SIGNAL_REQUEST, 0, &sig, sizeof (sig));
+    opus_int32 cx = 10;
+    aoo->source->codecControl (kAooCodecOpus, OPUS_SET_COMPLEXITY_REQUEST, 0, &cx, sizeof (cx));
+#endif
+}
+
 GigmaAooEngine::GigmaAooEngine() = default;
 
 GigmaAooEngine::~GigmaAooEngine()
@@ -170,6 +264,8 @@ bool GigmaAooEngine::prepare (double sr, int maxBlockSize, int numChannels)
 
     channelScratchIn.assign ((size_t) channels, std::vector<float> ((size_t) maxBlock, 0.0f));
     channelScratchOut.assign ((size_t) channels, std::vector<float> ((size_t) maxBlock, 0.0f));
+    channelScratchSend.assign ((size_t) channels, std::vector<float> ((size_t) maxBlock, 0.0f));
+    planarSend.resize ((size_t) channels);
     planarIn.resize ((size_t) channels);
     planarOut.resize ((size_t) channels);
     ring.assign (kRingSamples, 0);
@@ -188,14 +284,19 @@ bool GigmaAooEngine::prepare (double sr, int maxBlockSize, int numChannels)
         ready = true;   // still pass dry audio through
         return false;
     }
+    aoo->source->setEventHandler (&GigmaAooEngine::handleAooEvent, this, kAooEventModePoll);
+    aoo->sink->setEventHandler (&GigmaAooEngine::handleAooEvent, this, kAooEventModePoll);
     aoo->source->setup (channels, sampleRate, maxBlock, 0);
     aoo->sink->setup (channels, sampleRate, maxBlock, 0);
-    aoo->sink->setLatency (0.05);
-    aoo->sink->setBufferSize (0.1);
-
-    AooFormatOpus fmt {};
-    AooFormatOpus_init (&fmt, channels, (AooInt32) sampleRate, maxBlock, OPUS_APPLICATION_AUDIO);
-    aoo->source->setFormat (fmt.header);
+    // Send ring (audio thread → network thread). AOO's 25 ms default overflows when
+    // Logic renders in bursts (process-buffer range / live-mode switches), and each
+    // overflow becomes an empty block on the far end. Bigger ring ≠ more latency:
+    // the network thread drains it immediately.
+    aoo->source->setBufferSize (0.25);
+    aoo->source->setPacketSize (1000);   // + 52 B relay header stays far below MTU
+    stUnderruns = 0; stDrops = 0; stResends = 0; stXruns = 0; stSendOverflows = 0;
+    appliedFrameMs = 0;
+    applyQualityLocked();                // format (Opus frame), bitrate, buffer
     aoo->source->startStream (0, nullptr);
 #endif
     ready = true;
@@ -221,6 +322,7 @@ void GigmaAooEngine::release()
     }
     channelScratchIn.clear();
     channelScratchOut.clear();
+    channelScratchSend.clear();
 }
 
 std::string GigmaAooEngine::startNetwork (int preferredPort)
@@ -499,8 +601,7 @@ void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
 {
     // Invariant: Gigma is an insert FX, so the channel's own audio must ALWAYS
     // reach the output. Remote peers are only ever *added* on top. Anything we
-    // can't handle (not prepared, oversized block, extra channels) is passed
-    // through untouched rather than zeroed.
+    // can't handle (not prepared, extra channels) is passed through untouched.
     auto passThrough = [&] (int c, int from, int to)
     {
         if (! (outputs && outputs[c]) || to <= from)
@@ -516,21 +617,38 @@ void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
 
     const bool isReady = ready.load (std::memory_order_acquire) && ! channelScratchIn.empty();
     const int ch = isReady ? std::min (numChannels, channels) : 0;
-    const int n = isReady ? std::min (numSamples, maxBlock) : 0;
-    if (ch <= 0 || n <= 0)
+    if (ch <= 0 || numSamples <= 0)
     {
         for (int c = 0; c < numChannels; ++c)
             passThrough (c, 0, numSamples);
         return;
     }
 
+    // Hosts may hand us a block larger than prepareToPlay promised (Logic does on
+    // some live/prerender switches). Process it in maxBlock chunks instead of
+    // dropping the tail from the stream (that gap was audible on the far end).
+    for (int off = 0; off < numSamples; off += maxBlock)
+        sendChunk (0, ch, off, std::min (maxBlock, numSamples - off), inputs, outputs);
+
+    for (int c = ch; c < numChannels; ++c)
+        passThrough (c, 0, numSamples);
+}
+
+void GigmaAooEngine::sendChunk (int, int ch, int off, int n, const float* const* inputs, float* const* outputs)
+{
+    const bool limit = limiterOn.load (std::memory_order_relaxed);
     for (int c = 0; c < ch; ++c)
     {
+        auto& in = channelScratchIn[(size_t) c];
+        auto& snd = channelScratchSend[(size_t) c];
         if (inputs && inputs[c])
-            std::memcpy (channelScratchIn[(size_t) c].data(), inputs[c], (size_t) n * sizeof (float));
+            std::memcpy (in.data(), inputs[c] + off, (size_t) n * sizeof (float));
         else
-            std::memset (channelScratchIn[(size_t) c].data(), 0, (size_t) n * sizeof (float));
-        planarIn[(size_t) c] = channelScratchIn[(size_t) c].data();
+            std::memset (in.data(), 0, (size_t) n * sizeof (float));
+        for (int i = 0; i < n; ++i)
+            snd[(size_t) i] = limit ? softLimit (in[(size_t) i]) : (std::isfinite (in[(size_t) i]) ? in[(size_t) i] : 0.0f);
+        planarIn[(size_t) c] = in.data();
+        planarSend[(size_t) c] = snd.data();
         planarOut[(size_t) c] = channelScratchOut[(size_t) c].data();
         std::memset (channelScratchOut[(size_t) c].data(), 0, (size_t) n * sizeof (float));
     }
@@ -547,7 +665,7 @@ void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
             for (int i = 0; i < n; ++i)
                 for (int c = 0; c < ch; ++c)
                 {
-                    float v = std::clamp (channelScratchIn[(size_t) c][(size_t) i], -1.0f, 1.0f);
+                    float v = std::clamp (channelScratchSend[(size_t) c][(size_t) i], -1.0f, 1.0f);
                     ring[pos++ % kRingSamples] = (int16_t) std::lrint (v * 32767.0f);
                 }
             ringWrite.store (pos, std::memory_order_release);
@@ -556,7 +674,10 @@ void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
 
 #if GIGMA_HAS_AOO
     if (aoo && aoo->source)
-        aoo->source->process (const_cast<AooSample**> (planarIn.data()), n, aoo_getCurrentNtpTime());
+    {
+        if (aoo->source->process (const_cast<AooSample**> (planarSend.data()), n, aoo_getCurrentNtpTime()) == kAooErrorOverflow)
+            stSendOverflows.fetch_add (1, std::memory_order_relaxed);
+    }
     if (aoo && aoo->sink)
         aoo->sink->process (planarOut.data(), n, aoo_getCurrentNtpTime(), nullptr, nullptr);
 #endif
@@ -568,15 +689,13 @@ void GigmaAooEngine::process (const float* const* inputs, float* const* outputs,
             continue;
         const float* dry = channelScratchIn[(size_t) c].data();
         const float* wet = channelScratchOut[(size_t) c].data();
+        float* o = outputs[c] + off;
         for (int i = 0; i < n; ++i)
         {
             const float w = wet[i];
-            outputs[c][i] = dry[i] + (std::isfinite (w) ? w : 0.0f);
+            o[i] = dry[i] + (std::isfinite (w) ? w : 0.0f);
         }
-        passThrough (c, n, numSamples);   // block larger than prepared: keep dry
     }
-    for (int c = ch; c < numChannels; ++c)
-        passThrough (c, 0, numSamples);
 }
 
 void GigmaAooEngine::drainRelay()
@@ -630,6 +749,10 @@ void GigmaAooEngine::networkThreadMain()
                 aoo->source->send (&GigmaAooEngine::udpSend, this);
             if (aoo && aoo->sink)
                 aoo->sink->send (&GigmaAooEngine::udpSend, this);
+            if (aoo && aoo->sink)
+                aoo->sink->pollEvents();
+            if (aoo && aoo->source)
+                aoo->source->pollEvents();
         }
 #endif
         drainRelay();

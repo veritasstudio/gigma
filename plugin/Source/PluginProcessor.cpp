@@ -10,7 +10,102 @@ GigmaAudioProcessor::GigmaAudioProcessor()
     // Internet relay by default (works across any NAT). GIGMA_DIRECT=1 forces
     // LAN/VPN-only direct UDP for the lowest possible latency.
     sessionClient.setUseRelay (juce::SystemStats::getEnvironmentVariable ("GIGMA_DIRECT", {}).isEmpty());
+    loadUserDefaults();   // last quality the user picked (project state overrides later)
     startThread();
+}
+
+namespace {
+juce::File gigmaSettingsFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+#if JUCE_MAC
+        .getChildFile ("Application Support")
+#endif
+        .getChildFile ("Gigma").getChildFile ("quality.xml");
+}
+
+juce::ValueTree qualityToTree (GigmaAudioProcessor::Preset p, const GigmaAooEngine::Quality& q)
+{
+    juce::ValueTree t ("GigmaQuality");
+    t.setProperty ("preset", (int) p, nullptr);
+    t.setProperty ("bufferMs", q.bufferMs, nullptr);
+    t.setProperty ("bitrateKbps", q.bitrateKbps, nullptr);
+    t.setProperty ("frameMs", q.frameMs, nullptr);
+    t.setProperty ("redundancy", q.redundancy, nullptr);
+    t.setProperty ("limiter", q.limiter, nullptr);
+    return t;
+}
+
+bool treeToQuality (const juce::ValueTree& t, GigmaAudioProcessor::Preset& p, GigmaAooEngine::Quality& q)
+{
+    if (! t.isValid() || ! t.hasType ("GigmaQuality"))
+        return false;
+    const GigmaAooEngine::Quality d;
+    p = (GigmaAudioProcessor::Preset) juce::jlimit (0, 3, (int) t.getProperty ("preset", 1));
+    q.bufferMs = t.getProperty ("bufferMs", d.bufferMs);
+    q.bitrateKbps = t.getProperty ("bitrateKbps", d.bitrateKbps);
+    q.frameMs = t.getProperty ("frameMs", d.frameMs);
+    q.redundancy = t.getProperty ("redundancy", d.redundancy);
+    q.limiter = t.getProperty ("limiter", d.limiter);
+    return true;
+}
+} // namespace
+
+GigmaAooEngine::Quality GigmaAudioProcessor::presetQuality (Preset p)
+{
+    GigmaAooEngine::Quality q;
+    switch (p)
+    {
+        case Preset::lowLatency: q.bufferMs = 60;  q.bitrateKbps = 128; q.frameMs = 10; q.redundancy = 1; break;
+        case Preset::stable:     q.bufferMs = 300; q.bitrateKbps = 192; q.frameMs = 20; q.redundancy = 2; break;
+        case Preset::balanced:
+        case Preset::custom:
+        default:                 q.bufferMs = 150; q.bitrateKbps = 160; q.frameMs = 20; q.redundancy = 1; break;
+    }
+    q.limiter = true;
+    return q;
+}
+
+void GigmaAudioProcessor::applyQuality (Preset p, const GigmaAooEngine::Quality& q, bool saveDefault)
+{
+    currentPreset = p;
+    aooEngine.setQuality (q);
+    if (saveDefault)
+        saveUserDefaults();
+}
+
+void GigmaAudioProcessor::setPreset (Preset p)
+{
+    if (p == Preset::custom)
+        applyQuality (p, aooEngine.quality(), true);
+    else
+        applyQuality (p, presetQuality (p), true);
+}
+
+void GigmaAudioProcessor::setQuality (const GigmaAooEngine::Quality& q)
+{
+    auto p = Preset::custom;
+    for (auto c : { Preset::lowLatency, Preset::balanced, Preset::stable })
+        if (presetQuality (c) == q)
+            p = c;
+    applyQuality (p, q, true);
+}
+
+void GigmaAudioProcessor::loadUserDefaults()
+{
+    Preset p = Preset::balanced;
+    GigmaAooEngine::Quality q = presetQuality (p);
+    if (auto xml = juce::XmlDocument::parse (gigmaSettingsFile()))
+        treeToQuality (juce::ValueTree::fromXml (*xml), p, q);
+    applyQuality (p, q, false);
+}
+
+void GigmaAudioProcessor::saveUserDefaults()
+{
+    auto f = gigmaSettingsFile();
+    f.getParentDirectory().createDirectory();
+    if (auto xml = qualityToTree (currentPreset.load(), aooEngine.quality()).createXml())
+        xml->writeTo (f);
 }
 
 GigmaAudioProcessor::~GigmaAudioProcessor()
@@ -69,6 +164,9 @@ GigmaAudioProcessor::Status GigmaAudioProcessor::status() const
     s.hostLive = statHostLive.load();
     s.peerRelayOn = aooEngine.peerRelayConfigured();
     s.peerRelayUp = aooEngine.peerRelayUp();
+    const auto st = aooEngine.stats();
+    s.underruns = st.underruns; s.drops = st.drops; s.resends = st.resends;
+    s.xruns = st.xruns; s.sendOverflows = st.sendOverflows;
     return s;
 }
 
@@ -157,8 +255,23 @@ juce::AudioProcessorEditor* GigmaAudioProcessor::createEditor()
     return new GigmaAudioProcessorEditor (*this);
 }
 
-void GigmaAudioProcessor::getStateInformation (juce::MemoryBlock&) {}
-void GigmaAudioProcessor::setStateInformation (const void*, int) {}
+void GigmaAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
+{
+    juce::ValueTree state ("GigmaState");
+    state.appendChild (qualityToTree (currentPreset.load(), aooEngine.quality()), nullptr);
+    if (auto xml = state.createXml())
+        copyXmlToBinary (*xml, dest);
+}
+
+void GigmaAudioProcessor::setStateInformation (const void* data, int size)
+{
+    auto xml = getXmlFromBinary (data, size);
+    if (! xml)
+        return;
+    Preset p; GigmaAooEngine::Quality q;
+    if (treeToQuality (juce::ValueTree::fromXml (*xml).getChildWithName ("GigmaQuality"), p, q))
+        applyQuality (p, q, false);   // project setting wins, don't touch the global default
+}
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
