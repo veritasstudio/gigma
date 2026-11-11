@@ -1,4 +1,6 @@
-const form = document.getElementById('start');
+Gigma.hydrate();
+
+const form = document.getElementById('start-form');
 const title = document.getElementById('title');
 const create = document.getElementById('create');
 const err = document.getElementById('err');
@@ -31,7 +33,7 @@ form.addEventListener('submit', async (e) => {
     err.hidden = false;
   } finally {
     create.disabled = false;
-    create.textContent = 'New meeting';
+    Gigma.setBtn(create, 'plus', 'New meeting');
   }
 });
 
@@ -42,3 +44,36 @@ document.getElementById('sharebtn').addEventListener('click', () => {
   Gigma.share(link.value, current && current.title);
 });
 link.addEventListener('focus', () => link.select());
+
+// ---- Landing page extras ----
+// Install paths: tap to copy.
+document.querySelectorAll('[data-copy]').forEach((b) => {
+  b.addEventListener('click', async () => {
+    Gigma.toast((await Gigma.copy(b.dataset.copy)) ? 'Path copied' : 'Copy failed — select the path instead');
+  });
+});
+
+// Highlight the download that matches this computer; phones get a hint instead.
+(() => {
+  const ua = navigator.userAgent || '';
+  const plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+  const phone = /iPhone|iPad|iPod|Android/i.test(ua) || (/Mac/.test(plat) && navigator.maxTouchPoints > 1);
+  if (phone) { document.getElementById('mobile-note').hidden = false; return; }
+  const card = /Win/i.test(plat + ua) ? 'dl-win' : /Mac/i.test(plat + ua) ? 'dl-mac' : null;
+  if (!card) return;
+  const el = document.getElementById(card);
+  el.classList.add('is-rec');
+  el.querySelector('.rec').hidden = false;
+})();
+
+// Decorative level meter in the hero illustration.
+(() => {
+  const m = document.getElementById('mock-meter');
+  if (!m) return;
+  for (let i = 0; i < 16; i++) {
+    const b = document.createElement('i');
+    b.style.setProperty('--d', (i * 0.11).toFixed(2) + 's');
+    b.style.setProperty('--h', (35 + ((i * 37) % 60)) + '%');
+    m.appendChild(b);
+  }
+})();

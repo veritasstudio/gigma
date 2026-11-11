@@ -30,7 +30,7 @@ window.Gigma = (() => {
       return ok;
     }
   }
-  // Native share sheet on phones (WhatsApp, Messages…); copy elsewhere.
+  // Native share sheet on phones (WhatsApp, Messages); copy elsewhere.
   async function share(url, title) {
     if (navigator.share && matchMedia('(pointer: coarse)').matches) {
       try { await navigator.share({ title: title || 'Gigma session', text: 'Join my Gigma session', url }); return; }
@@ -38,6 +38,18 @@ window.Gigma = (() => {
     }
     toast((await copy(url)) ? 'Link copied' : 'Copy failed — long-press the link');
   }
+  // Inline icon: references the local sprite (/icons.svg), no CDN.
+  function icon(name, cls) {
+    return '<svg class="ic' + (cls ? ' ' + cls : '') + '" aria-hidden="true" focusable="false"><use href="/icons.svg#' + name + '"/></svg>';
+  }
+  // Set a button's content to an icon plus a text label.
+  function setBtn(el, name, label) { el.innerHTML = icon(name) + '<span class="lbl">' + label + '</span>'; }
+  // Turn <i data-icon="mic"></i> placeholders into inline SVGs.
+  function hydrate(root) {
+    (root || document).querySelectorAll('i[data-icon]').forEach((el) => {
+      el.outerHTML = icon(el.dataset.icon, el.dataset.cls || '');
+    });
+  }
   function initial(s) { return (String(s || '?').trim()[0] || '?').toUpperCase(); }
-  return { toast, copy, share, initial };
+  return { toast, copy, share, initial, icon, setBtn, hydrate };
 })();

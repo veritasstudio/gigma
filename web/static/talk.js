@@ -1,7 +1,7 @@
 // Browser mic talk-back for Gigma rooms.
 //
-// Up:   mic → AudioWorklet → 48 kHz mono 20 ms frames → Opus (WebCodecs) or,
-//       where AudioEncoder/Opus is missing, PCM16 16 kHz → the same WebSocket
+// Up:   mic -> AudioWorklet -> 48 kHz mono 20 ms frames -> Opus (WebCodecs) or,
+//       where AudioEncoder/Opus is missing, PCM16 16 kHz -> the same WebSocket
 //       used for listening. Frame: codec u8 | 3 reserved | seq u32 LE | payload.
 // Down: other guests' mics arrive on that socket as 12-byte-header frames with
 //       sampleRate == 0: seq u32 | 0 u32 | codec u8 | 0 | talker u16 | payload.
@@ -13,7 +13,7 @@ window.GigmaTalk = (() => {
   let enc = null, codec = 0, seq = 0, ts = 0, live = false;
   let acc = new Float32Array(FRAME * 8), accN = 0, rsPos = 0, rsPrev = 0;
   let level = 0;
-  const players = new Map(); // talker → { dec, next, lastAt }
+  const players = new Map(); // talker -> { dec, next, lastAt }
 
   const WORKLET = `class GigmaCap extends AudioWorkletProcessor {
     process(inputs) { const c = inputs[0] && inputs[0][0]; if (c) this.port.postMessage(c.slice(0)); return true; }
@@ -54,7 +54,7 @@ window.GigmaTalk = (() => {
       ts += 20000;
       enc.encode(ad); ad.close();
     } else {
-      const n = FRAME / 3, pcm = new Int16Array(n); // 48k → 16k: 3-tap box filter + decimate
+      const n = FRAME / 3, pcm = new Int16Array(n); // 48k -> 16k: 3-tap box filter + decimate
       for (let i = 0; i < n; i++) {
         const v = (f[3 * i] + f[3 * i + 1] + f[3 * i + 2]) / 3;
         pcm[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
@@ -63,7 +63,7 @@ window.GigmaTalk = (() => {
     }
   }
 
-  // ctx.sampleRate → 48 kHz (linear), then cut into 20 ms frames.
+  // ctx.sampleRate -> 48 kHz (linear), then cut into 20 ms frames.
   function onCapture(chunk) {
     const step = ctx.sampleRate / 48000;
     if (accN + Math.ceil(chunk.length / step) + 2 > acc.length) accN = 0;

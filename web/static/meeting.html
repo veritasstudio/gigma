@@ -7,12 +7,13 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Join · Gigma</title>
-  <link rel="stylesheet" href="/styles.css?v=3" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css?v=4" />
 </head>
 <body>
   <main class="shell join">
     <header class="brand">
-      <div class="logo" aria-hidden="true">G</div>
+      <a class="logo" href="/" aria-label="Gigma home"><i data-icon="logo"></i></a>
       <div>
         <h1>Join session</h1>
         <p>Type your name and tap Join. No login.</p>
@@ -28,12 +29,14 @@
       </div>
       <label for="name">Your name</label>
       <input id="name" type="text" placeholder="e.g. Priya" autocomplete="nickname" autocapitalize="words" enterkeyhint="go" maxlength="40" />
-      <button id="join" class="primary block" type="submit">Join</button>
+      <button id="join" class="primary block" type="submit"><i data-icon="headphones"></i><span class="lbl">Join</span></button>
       <p id="err" class="error" role="alert" hidden></p>
     </form>
     <p class="hint">Listen and talk from this phone or browser — no install. Headphones recommended.</p>
   </main>
+  <script src="/common.js?v=3"></script>
   <script>
+    Gigma.hydrate();
     const id = location.pathname.split('/').filter(Boolean)[1];
     const form = document.getElementById('joinform');
     const nameEl = document.getElementById('name');
@@ -86,11 +89,11 @@
         err.textContent = (e && e.message) || 'Network error — try again.';
         err.hidden = false;
         join.disabled = false;
-        join.textContent = 'Join';
+        Gigma.setBtn(join, 'headphones', 'Join');
       }
     });
     // Back-forward cache: reset the button if the user swipes back.
-    addEventListener('pageshow', () => { join.disabled = false; join.textContent = 'Join'; });
+    addEventListener('pageshow', () => { join.disabled = false; Gigma.setBtn(join, 'headphones', 'Join'); });
   </script>
 </body>
 </html>

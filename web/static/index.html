@@ -3,49 +3,197 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b0f14" />
+  <meta name="theme-color" content="#070a12" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="description" content="Meeting links for DAW sessions. Share a link, guests listen live." />
-  <title>Gigma</title>
-  <link rel="stylesheet" href="/styles.css?v=3" />
+  <meta name="description" content="Gigma streams a channel from your DAW to anyone with a link. Guests listen and talk back from a browser; producers can join each other from the plugin over the internet. AU and VST3 for Mac and Windows." />
+  <meta property="og:title" content="Gigma: jam from your DAW with a link" />
+  <meta property="og:description" content="A plugin that streams your DAW channel live. Guests join in the browser, no login. AU and VST3 for Mac, VST3 for Windows." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://gigma.veritas.org.in/" />
+  <title>Gigma | Jam from your DAW with a link</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css?v=4" />
+  <link rel="stylesheet" href="/landing.css?v=1" />
 </head>
-<body>
-  <main class="shell">
-    <header class="brand">
-      <div class="logo" aria-hidden="true">G</div>
-      <div>
-        <h1>Gigma</h1>
-        <p>Share a link. Guests hear your DAW live.</p>
+<body class="landing">
+  <header class="nav-wrap">
+    <nav class="nav" aria-label="Main">
+      <a class="nav-brand" href="/" aria-label="Gigma home"><span class="logo"><i data-icon="logo"></i></span><span class="nav-name">Gigma</span></a>
+      <div class="nav-links">
+        <a href="#how">How it works</a>
+        <a href="#download">Download</a>
+        <a href="#faq">FAQ</a>
       </div>
-    </header>
+      <a class="btn primary nav-cta" href="#download"><i data-icon="download"></i><span>Download</span></a>
+    </nav>
+  </header>
 
-    <form class="card" id="start" novalidate>
-      <h2>Start a session</h2>
-      <p class="muted small">One link for everyone. Guests just open it and type their name — no login, no password.</p>
-      <label for="title">Session name</label>
-      <input id="title" type="text" placeholder="Friday jam" autocomplete="off" enterkeyhint="go" maxlength="80" />
-      <button id="create" class="primary block" type="submit">New meeting</button>
-      <p id="err" class="error" role="alert" hidden></p>
-    </form>
-
-    <section class="card" id="share" hidden>
-      <h2>Your meeting link</h2>
-      <input id="link" type="text" readonly aria-label="Meeting link" />
-      <div class="stack">
-        <div class="row">
-          <button id="sharebtn" class="primary" type="button">Share</button>
-          <button id="copy" type="button">Copy</button>
+  <main>
+    <!-- Hero -->
+    <section class="hero wrap">
+      <div class="hero-copy">
+        <p class="eyebrow"><i data-icon="audio-lines"></i> Low-latency collaboration from your DAW</p>
+        <h1>Jam with anyone.<br /><span class="grad">Right from your DAW.</span></h1>
+        <p class="lede">Put the Gigma plugin on a channel, share a link, and your guests hear it live. They join from a phone or browser, talk back with their mic, and other producers can plug in from their own DAW over the internet.</p>
+        <div class="cta-row">
+          <a class="btn primary big" href="#download"><i data-icon="download"></i> Download the plugin</a>
+          <a class="btn big" href="#start"><i data-icon="plus"></i> New meeting</a>
         </div>
-        <a id="open" class="btn ghost block" href="#">Open meeting page</a>
+        <ul class="chips" aria-label="Highlights">
+          <li><i data-icon="laptop"></i> Mac: AU + VST3</li>
+          <li><i data-icon="monitor"></i> Windows: VST3</li>
+          <li><i data-icon="smartphone"></i> Guests need no login</li>
+        </ul>
       </div>
-      <ol class="steps" style="margin-top:16px">
-        <li>Send the link to guests — they open it, type a name and tap <strong>Listen</strong>.</li>
-        <li>Audio comes from the <strong>Gigma</strong> plugin on your DAW channel.</li>
+
+      <!-- Illustration of the guest view (decorative) -->
+      <div class="hero-visual" aria-hidden="true">
+        <div class="mock">
+          <div class="mock-bar"><span class="logo sm"><i data-icon="logo"></i></span><div><b>Friday jam</b><small>You are in as Priya</small></div></div>
+          <div class="mock-card live">
+            <div class="avatar">M</div>
+            <div class="mock-name">Producer</div>
+            <span class="pill live">Live</span>
+            <div class="meter" id="mock-meter"></div>
+          </div>
+          <div class="mock-row">
+            <div class="mock-stat"><i data-icon="users"></i><div><small>Listeners</small><b>3</b></div></div>
+            <div class="mock-stat"><i data-icon="signal"></i><div><small>Connection</small><b>Good</b></div></div>
+          </div>
+          <div class="mock-ctl">
+            <div class="mock-btn on"><i data-icon="stop"></i> Stop</div>
+            <div class="mock-btn mic"><i data-icon="mic"></i> Mute</div>
+          </div>
+        </div>
+        <div class="float f1"><i data-icon="plug"></i><span>Gigma plugin<small>on your DAW channel</small></span></div>
+        <div class="float f2"><i data-icon="link"></i><span>One link<small>no login for guests</small></span></div>
+      </div>
+    </section>
+
+    <!-- What it does -->
+    <section class="wrap section" aria-labelledby="what-h">
+      <div class="section-head">
+        <h2 id="what-h">Built for making music together</h2>
+        <p class="muted">Gigma sits on a channel in your DAW. Your mix keeps passing through untouched while a copy streams out to the room.</p>
+      </div>
+      <div class="grid feat">
+        <article class="tile"><span class="tile-ic"><i data-icon="plug"></i></span><h3>Lives in your DAW</h3><p>Load it as AU or VST3 on any channel. It passes your audio straight through and streams a copy to your guests.</p></article>
+        <article class="tile"><span class="tile-ic"><i data-icon="smartphone"></i></span><h3>Guests just open a link</h3><p>They type a name in a phone or desktop browser and tap Listen. No install, no account, no password.</p></article>
+        <article class="tile"><span class="tile-ic"><i data-icon="mic"></i></span><h3>Talk back</h3><p>Guests unmute their browser mic and you hear them in your DAW. Browser guests hear each other too.</p></article>
+        <article class="tile"><span class="tile-ic"><i data-icon="globe"></i></span><h3>Plugin to plugin, anywhere</h3><p>Producers with the plugin join each other over the internet through the Gigma relay. No port forwarding, no VPN.</p></article>
+        <article class="tile"><span class="tile-ic"><i data-icon="sliders"></i></span><h3>Tune it to your network</h3><p>Pick Low latency, Balanced or Stable in the plugin. More buffer means fewer dropouts on a weak connection.</p></article>
+        <article class="tile"><span class="tile-ic"><i data-icon="users"></i></span><h3>See who is in the room</h3><p>The plugin shows who is connected, and the room page shows who is listening and who is talking.</p></article>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="wrap section" id="how" aria-labelledby="how-h">
+      <div class="section-head">
+        <h2 id="how-h">How it works</h2>
+        <p class="muted">Three steps from a blank session to everyone listening.</p>
+      </div>
+      <ol class="grid steps3">
+        <li class="tile"><span class="num">1</span><h3>Install the plugin</h3><p>Download it below and add Gigma to the channel you want to share, usually the master or a bus.</p></li>
+        <li class="tile"><span class="num">2</span><h3>Start a meeting, share the link</h3><p>In the plugin, choose New meeting (host) and copy the link. Send it on WhatsApp, Messages or anywhere.</p></li>
+        <li class="tile"><span class="num">3</span><h3>Guests join and listen</h3><p>Guests open the link, type a name and tap Listen. They can unmute to talk. Plugin users choose Join as plugin instead.</p></li>
       </ol>
     </section>
+
+    <!-- Downloads -->
+    <section class="wrap section" id="download" aria-labelledby="dl-h">
+      <div class="section-head">
+        <h2 id="dl-h">Download Gigma</h2>
+        <p class="muted">Pick your computer. Both builds are plain zip files with install steps below.</p>
+      </div>
+      <p class="notice" id="mobile-note" hidden><i data-icon="laptop"></i><span>Plugins install on a computer. Open this page on your Mac or PC to download, or send yourself the link.</span></p>
+      <div class="grid dl">
+        <article class="tile dl-card" id="dl-mac">
+          <span class="rec" hidden>Recommended for this computer</span>
+          <div class="dl-head"><span class="tile-ic"><i data-icon="laptop"></i></span><div><h3>Gigma for Mac</h3><p class="muted small">AU + VST3. For Logic Pro, Ableton Live and other hosts.</p></div></div>
+          <a class="btn primary block" href="https://github.com/veritasstudio/gigma/releases/latest/download/Gigma-mac.zip" rel="noopener"><i data-icon="download"></i> Download for Mac</a>
+          <h4>Install</h4>
+          <ol class="install">
+            <li>Unzip <code>Gigma-mac.zip</code>.</li>
+            <li>Copy the AU to <button class="copy-chip" type="button" data-copy="~/Library/Audio/Plug-Ins/Components"><code>~/Library/Audio/Plug-Ins/Components</code><i data-icon="copy"></i></button></li>
+            <li>Copy the VST3 to <button class="copy-chip" type="button" data-copy="~/Library/Audio/Plug-Ins/VST3"><code>~/Library/Audio/Plug-Ins/VST3</code><i data-icon="copy"></i></button></li>
+            <li>Quit and reopen your DAW. If macOS blocks the plugin, right-click it in Finder and choose <strong>Open</strong>.</li>
+          </ol>
+        </article>
+        <article class="tile dl-card" id="dl-win">
+          <span class="rec" hidden>Recommended for this computer</span>
+          <div class="dl-head"><span class="tile-ic"><i data-icon="monitor"></i></span><div><h3>Gigma for Windows</h3><p class="muted small">VST3. For FL Studio, Ableton Live, Reaper and Cubase.</p></div></div>
+          <a class="btn primary block" href="https://github.com/veritasstudio/gigma/releases/latest/download/Gigma-windows.zip" rel="noopener"><i data-icon="download"></i> Download for Windows</a>
+          <h4>Install</h4>
+          <ol class="install">
+            <li>Unzip <code>Gigma-windows.zip</code>.</li>
+            <li>Copy <code>Gigma.vst3</code> to <button class="copy-chip" type="button" data-copy="C:\Program Files\Common Files\VST3"><code>C:\Program Files\Common Files\VST3</code><i data-icon="copy"></i></button></li>
+            <li>Rescan plugins in your DAW. In FL Studio: Options, Manage plugins, Find installed plugins.</li>
+            <li>Add Gigma to a mixer channel or track.</li>
+          </ol>
+        </article>
+      </div>
+      <p class="hint all-rel"><a href="https://github.com/veritasstudio/gigma/releases" rel="noopener"><i data-icon="github"></i> All releases and source on GitHub</a></p>
+    </section>
+
+    <!-- Start a meeting (existing flow) -->
+    <section class="wrap section narrow" id="start" aria-labelledby="start-h">
+      <div class="section-head">
+        <h2 id="start-h">Start a meeting</h2>
+        <p class="muted">Create a meeting link right here. Guests open it, type a name and listen. The audio comes from the Gigma plugin on your DAW channel.</p>
+      </div>
+      <form class="card" id="start-form" novalidate>
+        <label for="title">Session name</label>
+        <input id="title" type="text" placeholder="Friday jam" autocomplete="off" enterkeyhint="go" maxlength="80" />
+        <button id="create" class="primary block" type="submit"><i data-icon="plus"></i><span class="lbl">New meeting</span></button>
+        <p id="err" class="error" role="alert" hidden></p>
+      </form>
+
+      <section class="card" id="share" hidden>
+        <h2>Your meeting link</h2>
+        <input id="link" type="text" readonly aria-label="Meeting link" />
+        <div class="stack">
+          <div class="row">
+            <button id="sharebtn" class="primary" type="button"><i data-icon="share"></i> Share</button>
+            <button id="copy" type="button"><i data-icon="copy"></i> Copy</button>
+          </div>
+          <a id="open" class="btn ghost block" href="#"><i data-icon="arrow-right"></i> Open meeting page</a>
+        </div>
+        <ol class="steps" style="margin-top:16px">
+          <li>Send the link to guests. They open it, type a name and tap <strong>Listen</strong>.</li>
+          <li>Audio comes from the <strong>Gigma</strong> plugin on your DAW channel.</li>
+        </ol>
+      </section>
+    </section>
+
+    <!-- FAQ -->
+    <section class="wrap section narrow" id="faq" aria-labelledby="faq-h">
+      <div class="section-head">
+        <h2 id="faq-h">Questions</h2>
+      </div>
+      <div class="faq">
+        <details><summary>Do guests need an account or an app?<i data-icon="chevron-down"></i></summary><p>No. Guests open the link in a phone or desktop browser, type a name and tap Listen. There is no login and no install.</p></details>
+        <details><summary>Should everyone wear headphones?<i data-icon="chevron-down"></i></summary><p>Yes, please. If a guest unmutes without headphones, their mic picks up the music from their speakers and you hear your own track coming back.</p></details>
+        <details><summary>How much delay is there?<i data-icon="chevron-down"></i></summary><p>There is always some. Browser guests hear you about a quarter of a second behind your DAW. Plugin to plugin goes through our relay, so it depends on both connections and is usually a hundred milliseconds or more. That works well for sharing ideas, reviewing a mix and loose jamming. It is not meant for playing tightly in time together.</p></details>
+        <details><summary>My connection is weak. What can I do?<i data-icon="chevron-down"></i></summary><p>Open the plugin's quality setting and switch from Balanced to Stable. It adds buffer so you get fewer crackles and dropouts, at the cost of a little more delay. Wired internet or a strong Wi-Fi signal helps most.</p></details>
+        <details><summary>Which DAWs does it work with?<i data-icon="chevron-down"></i></summary><p>The Mac build includes AU and VST3. The Windows build is VST3, for hosts like FL Studio, Ableton Live, Reaper and Cubase. Any DAW that loads these formats should be able to use it.</p></details>
+        <details><summary>Can two producers connect plugin to plugin?<i data-icon="chevron-down"></i></summary><p>Yes. The second producer pastes your meeting link into the plugin and chooses Join as plugin. Audio goes through the Gigma relay, so nobody needs to open a port or set up a VPN.</p></details>
+      </div>
+    </section>
   </main>
-  <script src="/common.js?v=2"></script>
-  <script src="/app.js?v=2"></script>
+
+  <footer class="foot wrap">
+    <div class="foot-in">
+      <span class="nav-brand"><span class="logo sm"><i data-icon="logo"></i></span><span class="nav-name">Gigma</span></span>
+      <span class="muted small">Made by <a href="https://www.veritas.org.in" rel="noopener">Veritas Studio</a></span>
+      <span class="foot-links">
+        <a href="https://github.com/veritasstudio/gigma" rel="noopener"><i data-icon="github"></i> GitHub</a>
+        <a href="https://github.com/veritasstudio/gigma/releases" rel="noopener"><i data-icon="download"></i> Releases</a>
+      </span>
+    </div>
+  </footer>
+
+  <script src="/common.js?v=3"></script>
+  <script src="/app.js?v=3"></script>
 </body>
 </html>

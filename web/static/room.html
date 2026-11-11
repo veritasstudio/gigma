@@ -7,18 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Gigma</title>
-  <link rel="stylesheet" href="/styles.css?v=3" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css?v=4" />
 </head>
 <body>
   <div class="room">
     <header class="topbar">
-      <a class="logo" href="/" aria-label="Gigma home">G</a>
+      <a class="logo" href="/" aria-label="Gigma home"><i data-icon="logo"></i></a>
       <div class="titles">
         <strong id="meeting-title">Session</strong>
         <span>You’re in as <b id="you"></b></span>
       </div>
-      <button id="share" class="icon-btn ghost" type="button">Invite</button>
-      <a id="leave" class="btn icon-btn danger" href="/">Leave</a>
+      <button id="share" class="icon-btn ghost" type="button" aria-label="Invite people"><i data-icon="share"></i><span class="lbl">Invite</span></button>
+      <a id="leave" class="btn icon-btn danger" href="/" aria-label="Leave session"><i data-icon="log-out"></i><span class="lbl">Leave</span></a>
     </header>
 
     <main class="stage">
@@ -31,8 +32,8 @@
       </section>
 
       <div class="info-grid">
-        <div class="stat"><span>Listeners</span><strong id="listeners">—</strong></div>
-        <div class="stat"><span>Connection</span><strong id="conn">Not listening</strong></div>
+        <div class="stat"><i data-icon="users"></i><span>Listeners</span><strong id="listeners">—</strong></div>
+        <div class="stat"><i data-icon="signal"></i><span>Connection</span><strong id="conn">Not listening</strong></div>
       </div>
 
       <section class="card people" style="margin:0" aria-label="People">
@@ -41,7 +42,7 @@
       </section>
 
       <div class="card vol" style="margin:0">
-        <span>Volume</span>
+        <i data-icon="volume"></i><span>Volume</span>
         <input id="volume" type="range" min="0" max="1.5" step="0.01" value="1" aria-label="Volume" />
       </div>
 
@@ -50,15 +51,16 @@
 
     <footer class="controls">
       <div class="inner">
-        <button id="listen" class="primary" type="button">▶&nbsp; Listen</button>
-        <button id="mic" type="button" aria-pressed="false" aria-label="Unmute microphone">🎤&nbsp; Unmute</button>
+        <button id="listen" class="primary" type="button"><i data-icon="headphones"></i><span class="lbl">Listen</span></button>
+        <button id="mic" type="button" aria-pressed="false" aria-label="Unmute microphone"><i data-icon="mic-off"></i><span class="lbl">Unmute</span></button>
       </div>
     </footer>
   </div>
 
-  <script src="/common.js?v=2"></script>
-  <script src="/talk.js?v=1"></script>
+  <script src="/common.js?v=3"></script>
+  <script src="/talk.js?v=2"></script>
   <script>
+    Gigma.hydrate();
     const parts = location.pathname.split('/').filter(Boolean);
     const id = parts[1];
     const meetingUrl = location.origin + '/m/' + id;
@@ -111,7 +113,7 @@
       for (const t of list) {
         const me = t.id === myTalker;
         const talking = me ? GigmaTalk.isLive() : (GigmaTalk.speaking(t.id) || t.live);
-        rows.push(`<li class="${talking ? 'talking' : ''}"><span class="av">${Gigma.initial(t.name)}</span><span class="nm">${esc(t.name || 'Guest')}${me ? ' (you)' : ''}</span><span class="tag">${talking ? '🎤 on' : 'muted'}</span></li>`);
+        rows.push(`<li class="${talking ? 'talking' : ''}"><span class="av">${Gigma.initial(t.name)}</span><span class="nm">${esc(t.name || 'Guest')}${me ? ' (you)' : ''}</span><span class="tag">${talking ? Gigma.icon('mic') + 'on' : Gigma.icon('mic-off') + 'muted'}</span></li>`);
       }
       if (!listening && !list.length) rows.push('<li class="empty">Tap Listen to join the audio</li>');
       peopleEl.innerHTML = rows.join('');
@@ -139,7 +141,7 @@
     poll(); setInterval(poll, 2000);
     setInterval(() => render(lastSession), 500);
 
-    // ---- Relay player: PCM16 frames over WebSocket → Web Audio ----
+    // ---- Relay player: PCM16 frames over WebSocket into Web Audio ----
     // Frame: seq u32 | sampleRate u32 | channels u8 | 3 reserved | int16 LE interleaved
     let ctx, gain, ws, nextTime = 0, pending = [], pendingFrames = 0, pendingRate = 48000, pendingCh = 2;
     let wakeLock = null, retry = null;
@@ -209,7 +211,7 @@
       const unlock = ctx.createBufferSource(); unlock.buffer = ctx.createBuffer(1, 1, 22050); unlock.connect(ctx.destination); unlock.start(0);
       ctx.resume && ctx.resume();
       nextTime = 0; listening = true; connect();
-      listenBtn.innerHTML = '■&nbsp; Stop';
+      Gigma.setBtn(listenBtn, 'stop', 'Stop');
       listenBtn.classList.add('on'); listenBtn.setAttribute('aria-pressed', 'true');
       $('tip').textContent = 'Keep this page open. Tap Unmute to talk — headphones avoid echo.';
       if ('mediaSession' in navigator) {
@@ -221,7 +223,7 @@
       listening = false; wsOpen = false; clearTimeout(retry);
       ws && ws.close(); ctx && ctx.close(); ctx = null; gain = null;
       pending = []; pendingFrames = 0; level = 0;
-      listenBtn.innerHTML = '▶&nbsp; Listen';
+      Gigma.setBtn(listenBtn, 'headphones', 'Listen');
       listenBtn.classList.remove('on'); listenBtn.setAttribute('aria-pressed', 'false');
       GigmaTalk.stopAll(); setMicUi(false); myTalker = 0;
       $('tip').textContent = 'Tap Listen to start again.';
@@ -234,7 +236,7 @@
     function setMicUi(on) {
       micBtn.setAttribute('aria-pressed', String(on));
       micBtn.classList.toggle('live', on);
-      micBtn.innerHTML = on ? '🎤&nbsp; Mute' : '🎤&nbsp; Unmute';
+      Gigma.setBtn(micBtn, on ? 'mic' : 'mic-off', on ? 'Mute' : 'Unmute');
       micBtn.setAttribute('aria-label', on ? 'Mute microphone' : 'Unmute microphone');
     }
     function sendMic(b) { if (ws && ws.readyState === 1 && ws.bufferedAmount < 65536) ws.send(b); }
