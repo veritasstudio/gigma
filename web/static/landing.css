@@ -81,7 +81,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 84px; }
 }
 .float small { display: block; color: var(--muted); font-weight: 500; font-size: 0.78rem; }
 .float .ic { width: 22px; height: 22px; color: #9cc2ff; }
-.f1 { left: -22px; top: 40%; }
+.f1 { left: -34px; top: 27%; }
 .f2 { right: -6px; bottom: 0; }
 
 /* Sections */
